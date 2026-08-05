@@ -27,4 +27,13 @@ resource "google_monitoring_alert_policy" "pipeline_error_alert" {
   }
 
   notification_channels = [google_monitoring_notification_channel.email_alert.name]
+
+  # Obrigatório para políticas baseadas em log (Log-Based Alert Policies).
+  # Define o intervalo mínimo entre notificações repetidas do mesmo incidente,
+  # evitando spam de e-mail se o erro se repetir constantemente.
+  alert_strategy {
+    notification_rate_limit {
+      period = "300s" # No máximo 1 notificação a cada 5 minutos
+    }
+  }
 }
