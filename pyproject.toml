@@ -1,0 +1,22 @@
+[project]
+name = "pipeline-alfabetizacao"
+version = "0.1.0"
+description = "Tech Challenge Fase 2 - Pipeline Hibrido"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.0",
+    "pyarrow",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "hypothesis",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
