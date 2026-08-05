@@ -60,3 +60,13 @@ resource "google_project_service" "cloudscheduler" {
   disable_on_destroy = false
   depends_on         = [google_project_service.cloudresourcemanager]
 }
+
+# Habilita a API do IAM (necessária para criar/ler Service Accounts e seus bindings).
+# Faltou originalmente nesta lista — sem ela, chamadas de leitura/gestão de Service Account falham
+# com "SERVICE_DISABLED" assim que o billing_project é fixado explicitamente no provider.
+resource "google_project_service" "iam" {
+  project            = var.project_id
+  service            = "iam.googleapis.com"
+  disable_on_destroy = false
+  depends_on         = [google_project_service.cloudresourcemanager]
+}

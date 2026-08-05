@@ -8,6 +8,7 @@ output "ready" {
     google_project_service.billingbudgets,
     google_project_service.monitoring,
     google_project_service.run,
-    google_project_service.cloudscheduler
+    google_project_service.cloudscheduler,
+    google_project_service.iam
   ]
 }
