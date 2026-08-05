@@ -19,6 +19,12 @@ provider "google" {
   project = var.project_id
   # Autenticação acontece implicitamente via Application Default Credentials (ADC),
   # usando `gcloud auth application-default login`. Zero credenciais commitadas ou passadas aqui.
+
+  # Corrige o erro "quota project not set" em APIs sensíveis a billing (ex: billingbudgets.googleapis.com)
+  # sem depender de cada membro do grupo rodar `gcloud auth application-default set-quota-project`
+  # na própria máquina. Aqui fixamos explicitamente qual projeto "paga a cota" de toda chamada de API.
+  user_project_override = true
+  billing_project        = var.project_id
 }
 
 # 1. Habilitar APIs (Storage, BigQuery, PubSub, etc.)
