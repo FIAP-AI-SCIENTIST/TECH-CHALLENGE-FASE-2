@@ -38,8 +38,8 @@ class MunicipioRecord(BaseModel):
     proporcao_aluno_nivel_7: Optional[float] = None
     proporcao_aluno_nivel_8: Optional[float] = None
 
-class MetaAlfabetizacaoBrasilRecord(BaseModel):
-    """Contrato lógico para a entidade Meta Alfabetizacao Brasil."""
+class _MetaAlfabetizacaoBaseRecord(BaseModel):
+    """Campos comuns às 3 tabelas de meta (Brasil/UF/Municipio). Não é uma tabela própria."""
     ano: Optional[int] = None
     rede: Optional[str] = None
     taxa_alfabetizacao: Optional[float] = None
@@ -51,12 +51,16 @@ class MetaAlfabetizacaoBrasilRecord(BaseModel):
     meta_alfabetizacao_2029: Optional[float] = None
     meta_alfabetizacao_2030: Optional[float] = None
     percentual_participacao: Optional[float] = None
- 
-class MetaAlfabetizacaoUFRecord(MetaAlfabetizacaoBrasilRecord):
+
+class MetaAlfabetizacaoBrasilRecord(_MetaAlfabetizacaoBaseRecord):
+    """Contrato lógico para a entidade Meta Alfabetizacao Brasil."""
+    pass
+
+class MetaAlfabetizacaoUFRecord(_MetaAlfabetizacaoBaseRecord):
     """Contrato lógico para a entidade Meta Alfabetizacao por UF."""
     sigla_uf: Optional[str] = None
 
-class MetaAlfabetizacaoMunicipioRecord(MetaAlfabetizacaoUFRecord):
+class MetaAlfabetizacaoMunicipioRecord(_MetaAlfabetizacaoBaseRecord):
     """Contrato lógico para a entidade Meta Alfabetizacao por Municipio."""
     id_municipio: Optional[str] = None
     nivel_alfabetizacao: Optional[int] = None

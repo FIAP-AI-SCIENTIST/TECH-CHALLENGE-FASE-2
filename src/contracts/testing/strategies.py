@@ -92,7 +92,7 @@ def st_meta_alfabetizacao_brasil_record(draw):
 
 @st.composite
 def st_meta_alfabetizacao_uf_record(draw):
-    base = st_meta_alfabetizacao_brasil_record()
+    base = draw(st_meta_alfabetizacao_brasil_record())
     return MetaAlfabetizacaoUFRecord(
         **base.model_dump(),
         sigla_uf=draw(_st_sigla_uf)
@@ -100,7 +100,7 @@ def st_meta_alfabetizacao_uf_record(draw):
 
 @st.composite
 def st_meta_alfabetizacao_municipio_record(draw):
-    base = st_meta_alfabetizacao_brasil_record()
+    base = draw(st_meta_alfabetizacao_brasil_record())
     return MetaAlfabetizacaoMunicipioRecord(
         **base.model_dump(),
         id_municipio=draw(_st_id),
