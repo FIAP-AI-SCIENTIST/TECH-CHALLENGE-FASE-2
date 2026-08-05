@@ -33,3 +33,16 @@ else
     
     echo "Bucket criado com sucesso. Agora você pode rodar 'terraform init' com o backend configurado."
 fi
+
+# Habilita as APIs mínimas necessárias para o Terraform conseguir sequer LER o estado
+# dos recursos que ele gerencia. Sem isso, o Terraform falha na fase de "refresh"
+# antes de conseguir chegar na fase de criação (onde habilitaria as APIs sozinho),
+# criando um deadlock impossível de resolver via `terraform apply`.
+# As demais APIs (BigQuery, Pub/Sub, Run, etc.) são gerenciadas pelo módulo `apis`.
+echo "Habilitando APIs base (Cloud Resource Manager e IAM)..."
+gcloud services enable \
+    cloudresourcemanager.googleapis.com \
+    iam.googleapis.com \
+    --project="${PROJECT_ID}"
+
+echo "Bootstrap concluído. Rode 'make infra-init PROJECT_ID=${PROJECT_ID}' para continuar."
