@@ -1,0 +1,8 @@
+# Substitua pelos valores da sua conta Google Cloud
+project_id      = "useful-space-277919"
+billing_account = "XXXXXX-XXXXXX-XXXXXX"
+alert_email     = "seu-email@exemplo.com"
+
+# Locais padrão definidos conforme a Unit 2 NFR Design Q2 (US != us-central1)
+bq_location     = "US"           # Multi-region: MANDATÓRIO para bater com 'basedosdados'
+gcs_location    = "us-central1"  # Regional: Constituinte da multi-region US (melhor custo)
