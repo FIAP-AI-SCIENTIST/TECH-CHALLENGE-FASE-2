@@ -2,6 +2,7 @@
 
 import time
 from collections import defaultdict
+from collections.abc import Iterator
 
 from google.cloud import bigquery
 

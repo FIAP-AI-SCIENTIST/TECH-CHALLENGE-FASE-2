@@ -30,7 +30,7 @@ def with_retry(
             # Pega time.sleep do módulo da função decorada — assim
             # patch("observability.audit.time.sleep") intercepta corretamente
             sleep_fn = getattr(sys.modules[func.__module__], "time").sleep
-            last_exc = None
+            last_exc: BaseException | None = None
             for tentativa in range(max_attempts):
                 try:
                     return func(*args, **kwargs)
@@ -40,7 +40,9 @@ def with_retry(
                         sleep_fn(backoff[tentativa])
                         continue
                     raise
-            raise last_exc
+            if last_exc is not None:
+                raise last_exc
+            raise ValueError("with_retry requires max_attempts >= 1")
 
         return wrapper
 
