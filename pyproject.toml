@@ -6,6 +6,8 @@ requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.0",
     "pyarrow",
+    "google-cloud-bigquery",
+    "google-cloud-monitoring",
 ]
 
 [project.optional-dependencies]
