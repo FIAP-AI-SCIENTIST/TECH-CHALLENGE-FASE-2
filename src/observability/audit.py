@@ -10,6 +10,7 @@ PROJECT_ID = "useful-space-277919"
 DATASET_ID = "alfabetizacao_analytics"
 TABLE_ID = "pipeline_audit_log"
 MAX_ATTEMPTS = 3
+TIMEOUT_SECONDS = 10
 
 def _build_payload(run: RunContext) -> dict:
     """Monta o dicionário para insert_rows_json do BigQuery.
@@ -32,7 +33,7 @@ def _build_payload(run: RunContext) -> dict:
 @with_retry()
 def _do_insert(client: bigquery.Client, table_id: str, payload: dict) -> None:
     """Operação atômica: chama insert_rows_json e levanta se retornar erros."""
-    errors = client.insert_rows_json(table_id, [payload])
+    errors = client.insert_rows_json(table_id, [payload], timeout=TIMEOUT_SECONDS)
     if errors:
         raise RuntimeError("BigQuery insert returned errors")
 

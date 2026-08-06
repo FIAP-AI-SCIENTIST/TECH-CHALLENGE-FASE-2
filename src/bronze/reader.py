@@ -13,6 +13,7 @@ from google.api_core.exceptions import NotFound
 from common.retry import with_retry
 
 BUCKET_NAME = "useful-space-277919-datalake"
+TIMEOUT_SECONDS = 10
 
 
 def parse_partition_path(path: str) -> tuple:
@@ -54,7 +55,7 @@ def _list_blobs_for_entity(client: storage.Client, bucket_name: str, entidade: s
     """Lista blobs sob o prefixo da entidade."""
     bucket = client.bucket(bucket_name)
     prefix = f"bronze/{entidade}/"
-    return list(bucket.list_blobs(prefix=prefix))
+    return list(bucket.list_blobs(prefix=prefix, timeout=TIMEOUT_SECONDS))
 
 
 def read_partition(entidade: str, ano: int | None = None) -> pa.Table:
@@ -91,4 +92,4 @@ def read_partition(entidade: str, ano: int | None = None) -> pa.Table:
 @with_retry()
 def _download_blob(blob: storage.Blob) -> bytes:
     """Baixa o conteúdo de um blob."""
-    return blob.download_as_bytes()
+    return blob.download_as_bytes(timeout=TIMEOUT_SECONDS)

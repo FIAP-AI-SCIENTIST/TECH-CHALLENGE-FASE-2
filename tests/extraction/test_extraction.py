@@ -9,6 +9,7 @@ from extraction.extraction import (
     BATCH_SIZE,
     BATCH_THRESHOLD,
     ENTITY_TABLE_MAP,
+    _do_query,
     compute_incremental_years,
     extract_entity,
     extract_full,
@@ -18,6 +19,27 @@ from extraction.extraction import (
 
 
 
+class TestDoQuery:
+    """Verifica retry na chamada real ao BigQuery (gap encontrado na revisão)."""
+
+    def test_retries_on_transient_failure_then_succeeds(self):
+        mock_client = MagicMock()
+        mock_result = MagicMock()
+        mock_client.query.return_value.result.side_effect = [
+            ConnectionError("transient"),
+            mock_result,
+        ]
+        with patch("extraction.extraction.time"):
+            result = _do_query(mock_client, "SELECT 1")
+        assert result is mock_result
+        assert mock_client.query.return_value.result.call_count == 2
+
+    def test_passes_explicit_timeout(self):
+        mock_client = MagicMock()
+        _do_query(mock_client, "SELECT 1")
+        mock_client.query.return_value.result.assert_called_once()
+        _, kwargs = mock_client.query.return_value.result.call_args
+        assert kwargs.get("timeout") == 10
 
 class TestComputeIncrementalYears:
     """Verifica cálculo de anos incrementais."""

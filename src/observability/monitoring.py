@@ -13,12 +13,13 @@ PROJECT_ID = "useful-space-277919"
 DEFAULT_SUBSCRIPTION = "alfabetizacao-streaming-consumer-sub"
 METRIC_TYPE = "pubsub.googleapis.com/subscription/num_undelivered_messages"
 MAX_ATTEMPTS = 3
+TIMEOUT_SECONDS = 10
 
 
 @with_retry()
 def _do_list_time_series(client, request):
     """Operação atômica: chama list_time_series. Exceções são tratadas pelo decorator."""
-    return client.list_time_series(request=request)
+    return client.list_time_series(request=request, timeout=TIMEOUT_SECONDS)
 
 
 def _read_undelivered_count(client: monitoring_v3.MetricServiceClient, subscription_path: str) -> Optional[int]:

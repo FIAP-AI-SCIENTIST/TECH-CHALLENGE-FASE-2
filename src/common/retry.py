@@ -9,9 +9,14 @@ from typing import Callable, Tuple, Any
 def with_retry(
     max_attempts: int = 3,
     backoff: Tuple[float, ...] = (0.5, 1.0, 2.0),
-    timeout: int = 10,
 ) -> Callable[..., Any]:
     """Decorator que envolve uma função de chamada de rede com retry + backoff.
+
+    NOTA: este decorator não aplica timeout — timeout é responsabilidade da
+    função decorada, que deve passar ``timeout=...`` explicitamente para a
+    chamada real do client GCP (cada API tem sua própria forma de aceitar
+    timeout; não há como impor isso genericamente aqui sem inspecionar a
+    assinatura de cada client).
 
     CRÍTICO: recupera time.sleep do módulo da função decorada (não de
     common.retry) para que patches dos testes existentes em observability/

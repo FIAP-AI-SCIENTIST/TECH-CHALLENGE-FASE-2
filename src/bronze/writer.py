@@ -2,7 +2,6 @@
 
 import io
 import time
-import re
 from typing import List
 
 import pyarrow as pa
@@ -12,6 +11,7 @@ from google.cloud import storage
 from common.retry import with_retry
 
 BUCKET_NAME = "useful-space-277919-datalake"
+TIMEOUT_SECONDS = 10
 
 
 def build_partition_path(entidade: str, ano: int) -> str:
@@ -51,17 +51,17 @@ def _delete_blobs_under_prefix(client: storage.Client, bucket_name: str, prefix:
     bucket = client.bucket(bucket_name)
     blobs = list(_list_blobs_with_prefix(client, bucket_name, prefix))
     for blob in blobs:
-        blob.delete()
+        blob.delete(timeout=TIMEOUT_SECONDS)
 
 
 @with_retry()
 def _list_blobs_with_prefix(client: storage.Client, bucket_name: str, prefix: str) -> List:
     """Lista blobs sob o prefixo especificado."""
     bucket = client.bucket(bucket_name)
-    return list(bucket.list_blobs(prefix=prefix))
+    return list(bucket.list_blobs(prefix=prefix, timeout=TIMEOUT_SECONDS))
 
 
 @with_retry()
 def _upload_blob(blob: storage.Blob, buffer: io.BytesIO) -> None:
     """Faz upload de um buffer para o blob especificado."""
-    blob.upload_from_string(buffer.read(), content_type="application/octet-stream")
+    blob.upload_from_string(buffer.read(), content_type="application/octet-stream", timeout=TIMEOUT_SECONDS)

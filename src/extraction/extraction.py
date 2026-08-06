@@ -1,5 +1,6 @@
 """Extração de entidades do BigQuery para a camada Bronze."""
 
+import time
 from collections import defaultdict
 from typing import Iterator, List
 
@@ -7,6 +8,7 @@ from google.cloud import bigquery
 
 from bronze import reader as bronze_reader
 from bronze import writer as bronze_writer
+from common.retry import with_retry
 from contracts.models import (
     DadosAlunosRecord,
     MetaAlfabetizacaoBrasilRecord,
@@ -23,6 +25,7 @@ PROJECT_ID = "useful-space-277919"
 SOURCE_DATASET = "basedosdados.br_inep_avaliacao_alfabetizacao"
 BATCH_THRESHOLD = 500_000
 BATCH_SIZE = 50_000
+TIMEOUT_SECONDS = 10
 
 ENTITY_TABLE_MAP = {
     "uf": ("uf", UFRecord),
@@ -50,6 +53,11 @@ def batched(iterable, size: int) -> Iterator[list]:
     if batch:
         yield batch
 
+@with_retry()
+def _do_query(client: bigquery.Client, sql: str):
+    """Operação atômica: roda a query e materializa o RowIterator (com timeout)."""
+    return client.query(sql).result(timeout=TIMEOUT_SECONDS)
+
 
 def extract_full(entidade: str) -> None:
     """Extrai todos os dados de uma entidade do BigQuery para Bronze."""
@@ -58,8 +66,7 @@ def extract_full(entidade: str) -> None:
 
     with log_execution(unit="U4_Bronze", layer="Bronze") as run:
         client = bigquery.Client(project=PROJECT_ID)
-        query_job = client.query(sql)
-        rows = query_job.result()
+        rows = _do_query(client, sql)
 
         total_rows = getattr(rows, "total_rows", None)
         if total_rows and total_rows > BATCH_THRESHOLD:
@@ -107,8 +114,7 @@ def extract_incremental(entidade: str) -> None:
 
     with log_execution(unit="U4_Bronze", layer="Bronze") as run:
         client = bigquery.Client(project=PROJECT_ID)
-        query_job = client.query(sql)
-        rows = query_job.result()
+        rows = _do_query(client, sql)
 
         total_rows = getattr(rows, "total_rows", None)
         if total_rows and total_rows > BATCH_THRESHOLD:
