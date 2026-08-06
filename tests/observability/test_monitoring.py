@@ -29,6 +29,22 @@ class TestReadUndeliveredCount:
         result = _read_undelivered_count(client, "projects/p/subscriptions/s")
         assert result == 17
 
+    def test_uses_most_recent_point_when_series_has_multiple(self):
+        """A API do Cloud Monitoring retorna pontos em ordem reversa
+        (mais recente primeiro) — regressao para bug onde o codigo lia
+        points[-1] (o ponto mais antigo da janela) em vez de points[0]."""
+        client = MagicMock()
+        series = MagicMock()
+        newest_point = MagicMock()
+        newest_point.value.int64_value = 5
+        oldest_point = MagicMock()
+        oldest_point.value.int64_value = 200
+        series.points = [newest_point, oldest_point]
+        client.list_time_series.return_value = [series]
+
+        result = _read_undelivered_count(client, "projects/p/subscriptions/s")
+
+        assert result == 5
 
     def test_returns_none_when_no_series(self):
         client = MagicMock()

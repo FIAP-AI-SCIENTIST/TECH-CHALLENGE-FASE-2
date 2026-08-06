@@ -5,8 +5,8 @@ import logging
 import time
 import uuid
 from contextlib import contextmanager
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Optional
 
 _logger_initialized: bool = False
@@ -82,7 +82,7 @@ def log_execution(unit: str, layer: str):
         run_id=run_id,
         unit=unit,
         layer=layer,
-        timestamp=datetime.now(),
+        timestamp=datetime.now(timezone.utc),
     )
 
     logger.info(

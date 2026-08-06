@@ -55,7 +55,9 @@ def _read_undelivered_count(client: monitoring_v3.MetricServiceClient, subscript
 
         for series in response:
             if series.points:
-                point = series.points[-1]
+                # A API retorna pontos em ordem reversa (mais recente primeiro) —
+                # documentado pelo Google, sem opcao de override via orderBy.
+                point = series.points[0]
                 if point.value.int64_value is not None:
                     return int(point.value.int64_value)
                 if point.value.double_value is not None:
