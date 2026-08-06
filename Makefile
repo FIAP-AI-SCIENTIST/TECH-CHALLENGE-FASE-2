@@ -23,7 +23,6 @@ clean:
 	find . -type d -name ".pytest_cache" -exec rm -rf {} +
 	find . -type d -name ".hypothesis" -exec rm -rf {} +
 
-
 # --- Terraform (U2 Infrastructure) ---
 
 # Inicializa o Terraform passando o nome do bucket do bootstrap.sh
