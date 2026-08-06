@@ -1,4 +1,4 @@
-.PHONY: install test test-u1 clean infra-plan infra-apply infra-destroy
+.PHONY: install test test-u1 test-u4 bronze clean infra-plan infra-apply infra-destroy
 
 # O projeto reside num CIFS/SMB share que não suporta symlinks.
 # O venv fica em $HOME/.venvs para evitar o problema.
@@ -17,6 +17,18 @@ test: install
 
 test-u1: install
 	$(PYTEST) tests/contracts/ -v
+
+test-u4: install
+	$(PYTEST) tests/extraction/ tests/bronze/ -v
+
+# --- U4 Bronze Ingestion ---
+
+bronze: install
+	@for entity in uf municipio meta_alfabetizacao_brasil meta_alfabetizacao_uf meta_alfabetizacao_municipio alunos; do \
+		echo "Extraindo entidade: $$entity"; \
+		$(PYTHON) -c "from extraction.extraction import extract_entity; extract_entity('$$entity')"; \
+		echo "Entity $$entity done."; \
+	done
 
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
