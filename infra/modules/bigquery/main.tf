@@ -16,11 +16,13 @@ resource "google_bigquery_table" "audit_log" {
   table_id   = "pipeline_audit_log"
   project    = var.project_id
 
-  # Não é necessário delete_contents_on_destroy em nível de tabela, pois é gerenciado pelo dataset
-
-  # Não é necessário delete_contents_on_destroy em nível de tabela, pois é gerenciado pelo dataset
-  # Mas configuramos schema fixo
-  schema = <<EOF
+  # CRÍTICO: o provider protege tabelas BigQuery contra destroy por padrão
+  # (deletion_protection = true implícito desde a v4.66 do provider google),
+  # independente do delete_contents_on_destroy do dataset — são dois mecanismos
+  # diferentes. Sem isso, `terraform destroy` falha nesta tabela (e por
+  # dependência, no dataset que a contém), quebrando a efemeridade do projeto.
+  deletion_protection = false
+  schema              = <<EOF
 [
   {"name": "run_id", "type": "STRING", "mode": "REQUIRED", "description": "Identificador único da execução"},
   {"name": "unit", "type": "STRING", "mode": "REQUIRED", "description": "Qual unit rodou (ex: U4_Bronze)"},
