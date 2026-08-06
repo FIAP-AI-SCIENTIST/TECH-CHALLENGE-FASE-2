@@ -1,7 +1,7 @@
 """Decorator genérico para retry com backoff exponencial em chamadas de rede."""
 
 import sys
-import time
+import time  # pyright: ignore[reportUnusedImport] - necessario para with_retry (common.retry) interceptar time.sleep neste modulo
 from functools import wraps
 from typing import Callable, Any
 

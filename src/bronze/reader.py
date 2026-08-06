@@ -2,7 +2,7 @@
 
 import io
 import re
-import time
+import time  # pyright: ignore[reportUnusedImport] - necessario para with_retry (common.retry) interceptar time.sleep neste modulo
 
 import pyarrow as pa
 import pyarrow.parquet as pq

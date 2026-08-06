@@ -1,6 +1,6 @@
 """Extração de entidades do BigQuery para a camada Bronze."""
 
-import time
+import time  # pyright: ignore[reportUnusedImport] - necessario para with_retry (common.retry) interceptar time.sleep neste modulo
 from collections import defaultdict
 from collections.abc import Iterator
 

@@ -1,7 +1,7 @@
 """Escrita de partições Parquet no Cloud Storage (camada Bronze)."""
 
 import io
-import time
+import time  # pyright: ignore[reportUnusedImport] - necessario para with_retry (common.retry) interceptar time.sleep neste modulo
 
 import pyarrow as pa
 import pyarrow.parquet as pq

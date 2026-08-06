@@ -1,0 +1,17 @@
+{
+  "include": ["src", "tests"],
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "basic",
+  "reportMissingTypeStubs": false,
+  "reportUnknownVariableType": false,
+  "reportUnknownMemberType": false,
+  "reportUnknownParameterType": false,
+  "reportUnknownArgumentType": false,
+  "reportMissingTypeArgument": false,
+  "reportAny": false,
+  "reportAttributeAccessIssue": false,
+  "reportUnusedImport": "warning",
+  "reportUnusedVariable": "warning",
+  "reportUndefinedVariable": "error",
+  "reportImportCycles": false
+}

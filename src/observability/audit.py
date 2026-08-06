@@ -1,6 +1,6 @@
 """Escrita de linhas de auditoria no BigQuery para rastreio de execuções."""
 
-import time
+import time  # pyright: ignore[reportUnusedImport] - necessario para with_retry (common.retry) interceptar time.sleep neste modulo
 from google.cloud import bigquery
 
 from common.retry import with_retry

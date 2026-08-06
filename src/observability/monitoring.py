@@ -1,6 +1,6 @@
 """Leitura de métricas do Cloud Monitoring, com foco em Consumer Lag do Pub/Sub."""
 
-import time
+import time  # pyright: ignore[reportUnusedImport] - necessario para with_retry (common.retry) interceptar time.sleep neste modulo
 from datetime import datetime, timedelta, timezone
 
 from google.cloud import monitoring_v3
