@@ -1,27 +1,32 @@
 """Leitura de métricas do Cloud Monitoring, com foco em Consumer Lag do Pub/Sub."""
 
-import time
+import time  # pyright: ignore[reportUnusedImport] - necessario para with_retry (common.retry) interceptar time.sleep neste modulo
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 from google.cloud import monitoring_v3
 
+from common.retry import with_retry
 from observability.logging import setup_logger
 
 PROJECT_ID = "useful-space-277919"
 DEFAULT_SUBSCRIPTION = "alfabetizacao-streaming-consumer-sub"
 METRIC_TYPE = "pubsub.googleapis.com/subscription/num_undelivered_messages"
 MAX_ATTEMPTS = 3
-BACKOFF_SECONDS = (0.5, 1.0, 2.0)
 TIMEOUT_SECONDS = 10
 
 
-def _read_undelivered_count(client: monitoring_v3.MetricServiceClient, subscription_path: str) -> Optional[int]:
+@with_retry()
+def _do_list_time_series(client, request):
+    """Operação atômica: chama list_time_series. Exceções são tratadas pelo decorator."""
+    return client.list_time_series(request=request, timeout=TIMEOUT_SECONDS)
+
+
+def _read_undelivered_count(client: monitoring_v3.MetricServiceClient, subscription_path: str) -> int | None:
     """Lê o número de mensagens não entregues via Cloud Monitoring.
 
     Filtra por ``METRIC_TYPE`` e label da subscription, intervalo de
     5 minutos. Retorna o ponto mais recente ou ``None`` se não houver
-    séries. Implementa retry com backoff.
+    séries.
     """
     end_time = datetime.now(timezone.utc)
     start_time = end_time - timedelta(minutes=5)
@@ -44,31 +49,22 @@ def _read_undelivered_count(client: monitoring_v3.MetricServiceClient, subscript
         }
     )
 
-    for tentativa in range(MAX_ATTEMPTS):
-        try:
-            response = client.list_time_series(request=request, timeout=TIMEOUT_SECONDS)
-        except Exception:
-            if tentativa < MAX_ATTEMPTS - 1:
-                time.sleep(BACKOFF_SECONDS[tentativa])
-                continue
-            raise
+    response = _do_list_time_series(client, request)
 
-        for series in response:
-            if series.points:
-                # A API retorna pontos em ordem reversa (mais recente primeiro) —
-                # documentado pelo Google, sem opcao de override via orderBy.
-                point = series.points[0]
-                if point.value.int64_value is not None:
-                    return int(point.value.int64_value)
-                if point.value.double_value is not None:
-                    return int(point.value.double_value)
-        # Sem pontos — retorna None
-        return None
-
-    raise RuntimeError(f"Failed to read consumer lag after {MAX_ATTEMPTS} attempts")
+    for series in response:
+        if series.points:
+            # A API retorna pontos em ordem reversa (mais recente primeiro) —
+            # documentado pelo Google, sem opção de override via orderBy.
+            point = series.points[0]
+            if point.value.int64_value is not None:
+                return int(point.value.int64_value)
+            if point.value.double_value is not None:
+                return int(point.value.double_value)
+    # Sem pontos — retorna None
+    return None
 
 
-def get_consumer_lag(subscription_name: str = DEFAULT_SUBSCRIPTION) -> Optional[int]:
+def get_consumer_lag(subscription_name: str = DEFAULT_SUBSCRIPTION) -> int | None:
     """Retorna o Consumer Lag (mensagens não entregues) de uma subscription.
 
     Retorna ``None`` em caso de falha, sem propagar exceção.

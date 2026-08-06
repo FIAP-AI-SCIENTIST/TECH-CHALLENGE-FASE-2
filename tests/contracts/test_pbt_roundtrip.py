@@ -1,4 +1,3 @@
-from typing import Optional
 from pydantic import BaseModel
 import pyarrow as pa
 from hypothesis import given, strategies as st
@@ -9,7 +8,7 @@ from contracts.serialization import to_pyarrow_table
 class PbtModel(BaseModel):
     name: str
     value: int
-    flag: Optional[bool]
+    flag: bool | None
 
 # Gera instâncias aleatórias do PbtModel
 @st.composite

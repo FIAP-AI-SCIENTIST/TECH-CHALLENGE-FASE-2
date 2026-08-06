@@ -1,0 +1,125 @@
+"""Testes do módulo bronze.writer — escrita de partições Parquet no GCS."""
+
+import io
+from unittest.mock import MagicMock, patch
+
+import pyarrow as pa
+import pytest
+
+from bronze.writer import (
+    BUCKET_NAME,
+    build_partition_path,
+    clear_partition,
+    write_partition,
+)
+
+
+class TestBuildPartitionPath:
+    """Verifica construção de caminhos de partição."""
+
+    def test_basic_path(self):
+        result = build_partition_path("uf", 2023)
+        assert result == "bronze/uf/ano=2023/"
+
+    def test_different_entity_and_year(self):
+        result = build_partition_path("municipio", 2024)
+        assert result == "bronze/municipio/ano=2024/"
+
+    def test_alunos_entity(self):
+        result = build_partition_path("alunos", 2025)
+        assert result == "bronze/alunos/ano=2025/"
+
+
+class TestWritePartition:
+    """Verifica escrita de partições com mock de GCS.
+
+    write_partition NUNCA apaga nada — só escreve o arquivo do lote.
+    Limpeza da partição é responsabilidade exclusiva de clear_partition,
+    chamada pelo caller uma única vez por (entidade, ano) por execução.
+    """
+
+    def _make_table(self, num_rows: int = 10) -> pa.Table:
+        """Cria uma tabela PyArrow de teste."""
+        return pa.Table.from_pydict({
+            "ano": pa.array([2023] * num_rows),
+            "valor": pa.array([float(i) for i in range(num_rows)]),
+        })
+
+    def test_returns_num_rows(self):
+        table = self._make_table(num_rows=42)
+        with patch("bronze.writer.storage.Client") as mock_client_cls:
+            mock_bucket = MagicMock()
+            mock_client_cls.return_value.bucket.return_value = mock_bucket
+            mock_blob = MagicMock()
+            mock_bucket.blob.return_value = mock_blob
+
+            rows_written = write_partition("uf", 2023, table, part_index=0)
+
+        assert rows_written == 42
+
+    def test_never_deletes_blobs(self):
+        """write_partition não deve chamar list_blobs/delete — isso é do clear_partition."""
+        table = self._make_table()
+        with patch("bronze.writer.storage.Client") as mock_client_cls:
+            mock_bucket = MagicMock()
+            mock_client_cls.return_value.bucket.return_value = mock_bucket
+            mock_blob = MagicMock()
+            mock_bucket.blob.return_value = mock_blob
+
+            write_partition("uf", 2023, table, part_index=0)
+
+        mock_bucket.list_blobs.assert_not_called()
+
+    def test_uploads_with_correct_name(self):
+        table = self._make_table()
+        with patch("bronze.writer.storage.Client") as mock_client_cls:
+            mock_bucket = MagicMock()
+            mock_client_cls.return_value.bucket.return_value = mock_bucket
+            mock_blob = MagicMock()
+            mock_bucket.blob.return_value = mock_blob
+
+            write_partition("uf", 2023, table, part_index=0)
+
+        mock_bucket.blob.assert_called_once_with("bronze/uf/ano=2023/part-0.parquet")
+        mock_blob.upload_from_string.assert_called_once()
+
+    def test_multiple_batches_write_separate_files(self):
+        """Regressão do B1: lotes diferentes do mesmo ano nunca se sobrescrevem."""
+        table = self._make_table(num_rows=5)
+        with patch("bronze.writer.storage.Client") as mock_client_cls:
+            mock_bucket = MagicMock()
+            mock_client_cls.return_value.bucket.return_value = mock_bucket
+            mock_blob = MagicMock()
+            mock_bucket.blob.return_value = mock_blob
+
+            write_partition("uf", 2023, table, part_index=0)
+            write_partition("uf", 2023, table, part_index=1)
+
+        assert mock_bucket.blob.call_args_list == [
+            (("bronze/uf/ano=2023/part-0.parquet",),),
+            (("bronze/uf/ano=2023/part-1.parquet",),),
+        ]
+        assert mock_blob.upload_from_string.call_count == 2
+
+
+class TestClearPartition:
+    """Verifica limpeza de partição (delete dos blobs existentes)."""
+
+    def test_deletes_existing_blobs(self):
+        with patch("bronze.writer.storage.Client") as mock_client_cls:
+            mock_bucket = MagicMock()
+            mock_client_cls.return_value.bucket.return_value = mock_bucket
+            old_blob = MagicMock()
+            mock_bucket.list_blobs.return_value = [old_blob]
+
+            clear_partition("uf", 2023)
+
+        old_blob.delete.assert_called_once()
+
+    def test_no_blobs_is_a_noop(self):
+        with patch("bronze.writer.storage.Client") as mock_client_cls:
+            mock_bucket = MagicMock()
+            mock_client_cls.return_value.bucket.return_value = mock_bucket
+            mock_bucket.list_blobs.return_value = []
+
+            clear_partition("uf", 2023)  # não deve levantar exceção
