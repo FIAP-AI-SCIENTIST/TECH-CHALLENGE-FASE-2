@@ -18,10 +18,10 @@ test: install
 test-u1: install
 	$(PYTEST) tests/contracts/ -v
 
-test-u4: install
+test-extraction: install
 	$(PYTEST) tests/extraction/ tests/bronze/ -v
 
-# --- U4 Bronze Ingestion ---
+# --- Bronze Ingestion ---
 
 bronze: install
 	@for entity in uf municipio meta_alfabetizacao_brasil meta_alfabetizacao_uf meta_alfabetizacao_municipio alunos; do \
@@ -35,7 +35,7 @@ clean:
 	find . -type d -name ".pytest_cache" -exec rm -rf {} +
 	find . -type d -name ".hypothesis" -exec rm -rf {} +
 
-# --- Terraform (U2 Infrastructure) ---
+# --- Terraform (Infrastructure) ---
 
 # Inicializa o Terraform passando o nome do bucket do bootstrap.sh
 # PROJECT_ID vem de: (1) argumento explícito make infra-init PROJECT_ID=x,

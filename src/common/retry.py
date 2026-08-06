@@ -3,12 +3,12 @@
 import sys
 import time
 from functools import wraps
-from typing import Callable, Tuple, Any
+from typing import Callable, Any
 
 
 def with_retry(
     max_attempts: int = 3,
-    backoff: Tuple[float, ...] = (0.5, 1.0, 2.0),
+    backoff: tuple[float, ...] = (0.5, 1.0, 2.0),
 ) -> Callable[..., Any]:
     """Decorator que envolve uma função de chamada de rede com retry + backoff.
 

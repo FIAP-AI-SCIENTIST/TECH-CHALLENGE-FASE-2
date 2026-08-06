@@ -2,7 +2,6 @@
 
 import io
 import time
-from typing import List
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -55,7 +54,7 @@ def _delete_blobs_under_prefix(client: storage.Client, bucket_name: str, prefix:
 
 
 @with_retry()
-def _list_blobs_with_prefix(client: storage.Client, bucket_name: str, prefix: str) -> List:
+def _list_blobs_with_prefix(client: storage.Client, bucket_name: str, prefix: str) -> list:
     """Lista blobs sob o prefixo especificado."""
     bucket = client.bucket(bucket_name)
     return list(bucket.list_blobs(prefix=prefix, timeout=TIMEOUT_SECONDS))

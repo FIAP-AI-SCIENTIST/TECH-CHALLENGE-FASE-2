@@ -1,12 +1,12 @@
-# Tópico Pub/Sub para simular chegada contínua de eventos (Streaming Producer - U5)
+# Tópico Pub/Sub para simular chegada contínua de eventos (Streaming Producer)
 resource "google_pubsub_topic" "streaming_events" {
   name    = "alfabetizacao-streaming-events"
   project = var.project_id
 }
 
-# Assinatura (Subscription) para consumir os eventos e gravá-leno Bronze (Streaming Consumer - U5)
-# Por decisão arquitetural (NFR Design Q4), a Dead-Letter Queue (DLQ) foi omitida nesta etapa,
-# será responsabilidade exclusiva da Unit 5 (Streaming) reconfigurar o recurso caso seja necessário.
+# Assinatura (Subscription) para consumir os eventos e gravá-los no Bronze (Streaming Consumer)
+# Por decisão arquitetural, a Dead-Letter Queue (DLQ) foi omitida nesta etapa,
+# será responsabilidade do Streaming Consumer reconfigurar o recurso caso seja necessário.
 resource "google_pubsub_subscription" "streaming_consumer" {
   name    = "alfabetizacao-streaming-consumer-sub"
   project = var.project_id

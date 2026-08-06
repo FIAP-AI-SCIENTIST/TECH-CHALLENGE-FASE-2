@@ -1,6 +1,5 @@
 import pyarrow as pa
 import pytest
-from typing import Optional
 from pydantic import BaseModel
 
 from contracts.schema_mapper import to_pyarrow_schema
@@ -8,7 +7,7 @@ from contracts.schema_mapper import to_pyarrow_schema
 class DummyModel(BaseModel):
     name: str
     age: int
-    score: Optional[float]
+    score: float | None
     is_active: bool
 
 def test_to_pyarrow_schema():

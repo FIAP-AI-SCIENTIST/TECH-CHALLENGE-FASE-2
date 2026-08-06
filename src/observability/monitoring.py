@@ -2,7 +2,6 @@
 
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 from google.cloud import monitoring_v3
 
@@ -22,7 +21,7 @@ def _do_list_time_series(client, request):
     return client.list_time_series(request=request, timeout=TIMEOUT_SECONDS)
 
 
-def _read_undelivered_count(client: monitoring_v3.MetricServiceClient, subscription_path: str) -> Optional[int]:
+def _read_undelivered_count(client: monitoring_v3.MetricServiceClient, subscription_path: str) -> int | None:
     """Lê o número de mensagens não entregues via Cloud Monitoring.
 
     Filtra por ``METRIC_TYPE`` e label da subscription, intervalo de
@@ -65,7 +64,7 @@ def _read_undelivered_count(client: monitoring_v3.MetricServiceClient, subscript
     return None
 
 
-def get_consumer_lag(subscription_name: str = DEFAULT_SUBSCRIPTION) -> Optional[int]:
+def get_consumer_lag(subscription_name: str = DEFAULT_SUBSCRIPTION) -> int | None:
     """Retorna o Consumer Lag (mensagens não entregues) de uma subscription.
 
     Retorna ``None`` em caso de falha, sem propagar exceção.

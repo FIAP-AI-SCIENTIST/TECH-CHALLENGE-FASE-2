@@ -1,9 +1,8 @@
 """Leitura de partições Parquet do Cloud Storage (camada Bronze)."""
 
 import io
-import time
 import re
-from typing import Set
+import time
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -15,8 +14,7 @@ from common.retry import with_retry
 BUCKET_NAME = "useful-space-277919-datalake"
 TIMEOUT_SECONDS = 10
 
-
-def parse_partition_path(path: str) -> tuple:
+def parse_partition_path(path: str) -> tuple[str, int]:
     """Operação inversa de build_partition_path.
 
     Dado 'bronze/uf/ano=2023/' ou 'bronze/uf/ano=2023/part-0.parquet',
@@ -31,13 +29,13 @@ def parse_partition_path(path: str) -> tuple:
     return match.group(1), int(match.group(2))
 
 
-def list_bronze_years(entidade: str) -> Set[int]:
+def list_bronze_years(entidade: str) -> set[int]:
     """Lista os anos já gravados no Bronze para uma entidade.
 
     Retorna set() vazio se não houver nada (nunca levanta exceção
     por ausência — bucket vazio é um estado válido).
     """
-    years: Set[int] = set()
+    years: set[int] = set()
     try:
         client = storage.Client()
         bucket = client.bucket(BUCKET_NAME)

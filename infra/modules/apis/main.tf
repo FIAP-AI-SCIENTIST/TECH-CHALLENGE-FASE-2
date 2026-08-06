@@ -45,7 +45,7 @@ resource "google_project_service" "monitoring" {
   depends_on         = [google_project_service.cloudresourcemanager]
 }
 
-# Habilita APIs antecipadamente para U4/U5 (Cloud Run e Cloud Scheduler)
+# Habilita APIs antecipadamente para Cloud Run e Cloud Scheduler
 # Isso evita falhas de dependência na próxima fase, já que a ativação da API é idempotente e gratuita
 resource "google_project_service" "run" {
   project            = var.project_id

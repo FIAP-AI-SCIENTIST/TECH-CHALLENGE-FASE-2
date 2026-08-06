@@ -7,7 +7,6 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
 
 _logger_initialized: bool = False
 
@@ -19,11 +18,10 @@ class RunContext:
     unit: str
     layer: str
     timestamp: datetime
-    rows_read: Optional[int] = None
-    rows_written: Optional[int] = None
+    rows_read: int | None = None
+    rows_written: int | None = None
     duration_seconds: float = 0.0
     status: str = "SUCCESS"
-
 
 class _JSONFormatter(logging.Formatter):
     """Serializa registros de log como linhas JSON para stdout.

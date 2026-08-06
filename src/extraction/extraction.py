@@ -2,7 +2,6 @@
 
 import time
 from collections import defaultdict
-from typing import Iterator, List
 
 from google.cloud import bigquery
 
@@ -64,7 +63,7 @@ def extract_full(entidade: str) -> None:
     tabela, modelo = ENTITY_TABLE_MAP[entidade]
     sql = f"SELECT * FROM `{SOURCE_DATASET}.{tabela}`"
 
-    with log_execution(unit="U4_Bronze", layer="Bronze") as run:
+    with log_execution(unit="Bronze_Ingestion", layer="Bronze") as run:
         client = bigquery.Client(project=PROJECT_ID)
         rows = _do_query(client, sql)
 
@@ -112,7 +111,7 @@ def extract_incremental(entidade: str) -> None:
     max_existing = max(existing_years)
     sql = f"SELECT * FROM `{SOURCE_DATASET}.{tabela}` WHERE ano > {max_existing}"
 
-    with log_execution(unit="U4_Bronze", layer="Bronze") as run:
+    with log_execution(unit="Bronze_Ingestion", layer="Bronze") as run:
         client = bigquery.Client(project=PROJECT_ID)
         rows = _do_query(client, sql)
 

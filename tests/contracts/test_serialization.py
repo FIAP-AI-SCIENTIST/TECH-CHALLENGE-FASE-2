@@ -1,13 +1,12 @@
 import pyarrow as pa
 from pydantic import BaseModel
-from typing import Optional
 
 from contracts.serialization import to_pyarrow_table
 
 class SimpleModel(BaseModel):
     id: int
     value: str
-    is_valid: Optional[bool] = None
+    is_valid: bool | None = None
 
 def test_to_pyarrow_table():
     data = [

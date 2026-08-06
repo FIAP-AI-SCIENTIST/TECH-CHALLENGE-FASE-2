@@ -10,7 +10,7 @@ resource "google_bigquery_dataset" "analytics" {
   delete_contents_on_destroy = true
 }
 
-# Tabela de auditoria para o componente Observability (U3) registrar métricas de cada job do pipeline
+# Tabela de auditoria para o componente de Observabilidade registrar métricas de cada job do pipeline
 resource "google_bigquery_table" "audit_log" {
   dataset_id = google_bigquery_dataset.analytics.dataset_id
   table_id   = "pipeline_audit_log"
@@ -25,7 +25,7 @@ resource "google_bigquery_table" "audit_log" {
   schema              = <<EOF
 [
   {"name": "run_id", "type": "STRING", "mode": "REQUIRED", "description": "Identificador único da execução"},
-  {"name": "unit", "type": "STRING", "mode": "REQUIRED", "description": "Qual unit rodou (ex: U4_Bronze)"},
+  {"name": "unit", "type": "STRING", "mode": "REQUIRED", "description": "Qual unidade rodou (ex: Bronze_Ingestion)"},
   {"name": "layer", "type": "STRING", "mode": "REQUIRED", "description": "Camada alvo (ex: Bronze)"},
   {"name": "rows_read", "type": "INT64", "mode": "NULLABLE", "description": "Linhas lidas da origem"},
   {"name": "rows_written", "type": "INT64", "mode": "NULLABLE", "description": "Linhas escritas no destino"},

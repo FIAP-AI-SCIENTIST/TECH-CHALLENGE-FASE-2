@@ -45,10 +45,10 @@ resource "google_pubsub_subscription_iam_member" "subscription_access" {
   member       = "serviceAccount:${google_service_account.pipeline_sa.email}"
 }
 
-# Concede papel de leitura da Cloud Monitoring API — necessário para a Observability (U3)
-# ler a métrica nativa de Consumer Lag (num_undelivered_messages) da subscription do Pub/Sub.
-# Gap identificado durante o NFR Requirements da U3: os papéis acima cobrem escrita de dados
-# (Storage/BigQuery/Pub/Sub), mas nenhum cobre leitura de métricas de monitoramento.
+# Concede papel de leitura da Cloud Monitoring API — necessário para o componente de
+# Observabilidade ler a métrica nativa de Consumer Lag (num_undelivered_messages) da
+# subscription do Pub/Sub. Os papéis acima cobrem escrita de dados (Storage/BigQuery/
+# Pub/Sub), mas nenhum cobria leitura de métricas de monitoramento — adicionado aqui.
 resource "google_project_iam_member" "monitoring_viewer_access" {
   project = var.project_id
   role    = "roles/monitoring.viewer"
