@@ -18,19 +18,15 @@ def build_partition_path(entidade: str, ano: int) -> str:
     return f"bronze/{entidade}/ano={ano}/"
 
 
-def write_partition(entidade: str, ano: int, table: pa.Table) -> int:
+def write_partition(entidade: str, ano: int, table: pa.Table, part_index: int) -> int:
     """Escreve uma partição Parquet no GCS, sobrescrevendo partições existentes.
 
-    Apaga todos os blobs existentes sob o prefixo da partição,
-    serializa a tabela para Parquet e faz upload como part-0.parquet.
+    serializa a tabela para Parquet e faz upload como part-INDEX.parquet.
     Retorna o número de linhas escritas.
     """
     client = storage.Client()
-    bucket = client.bucket(BUCKET_NAME)
     prefix = build_partition_path(entidade, ano)
-
-    # Remove blobs existentes (overwrite)
-    _delete_blobs_under_prefix(client, BUCKET_NAME, prefix)
+    bucket = client.bucket(BUCKET_NAME)
 
     # Serializa para Parquet
     buffer = io.BytesIO()
@@ -38,10 +34,17 @@ def write_partition(entidade: str, ano: int, table: pa.Table) -> int:
     buffer.seek(0)
 
     # Upload
-    blob = bucket.blob(f"{prefix}part-0.parquet")
+    blob = bucket.blob(f"{prefix}part-{part_index}.parquet")
     _upload_blob(blob, buffer)
 
     return table.num_rows
+
+def clear_partition(entidade: str, ano: int) -> None:
+    client = storage.Client()
+    prefix = build_partition_path(entidade, ano)
+
+    # Remove blobs existentes (overwrite)
+    _delete_blobs_under_prefix(client, BUCKET_NAME, prefix)
 
 
 @with_retry()
@@ -64,3 +67,4 @@ def _list_blobs_with_prefix(client: storage.Client, bucket_name: str, prefix: st
 def _upload_blob(blob: storage.Blob, buffer: io.BytesIO) -> None:
     """Faz upload de um buffer para o blob especificado."""
     blob.upload_from_string(buffer.read(), content_type="application/octet-stream", timeout=TIMEOUT_SECONDS)
+

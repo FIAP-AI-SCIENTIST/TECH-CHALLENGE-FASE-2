@@ -2,7 +2,7 @@
 
 import time  # pyright: ignore[reportUnusedImport] - necessario para with_retry (common.retry) interceptar time.sleep neste modulo
 from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 
 from google.cloud import bigquery
 
@@ -59,50 +59,92 @@ def _do_query(client: bigquery.Client, sql: str):
     return client.query(sql).result(timeout=TIMEOUT_SECONDS)
 
 
-def extract_full(entidade: str) -> None:
-    """Extrai todos os dados de uma entidade do BigQuery para Bronze."""
-    tabela, modelo = ENTITY_TABLE_MAP[entidade]
-    sql = f"SELECT * FROM `{SOURCE_DATASET}.{tabela}`"
+def _split_into_batches(rows, total_rows) -> Iterable[list]:
+    """Decide entre processar tudo de uma vez ou em lotes (batching seletivo)."""
+    if total_rows and total_rows > BATCH_THRESHOLD:
+        return batched(rows, BATCH_SIZE)
+    return [list(rows)]
+
+
+def _instantiate_records(row_batch, modelo) -> list:
+    """Valida cada linha crua do BigQuery contra o Contrato (Pydantic) da entidade."""
+    return [modelo(**dict(row)) for row in row_batch]
+
+
+def _group_by_ano(instancias: list) -> dict:
+    """Agrupa instâncias validadas por ano — cada grupo vira uma escrita de partição."""
+    ano_groups: dict = defaultdict(list)
+    for inst in instancias:
+        ano = getattr(inst, "ano", None) or 0
+        ano_groups[ano].append(inst)
+    return ano_groups
+
+
+def _write_ano_groups(
+    entidade: str,
+    ano_groups: dict,
+    modelo,
+    anos_limpos: set[int],
+    parte_por_ano: dict[int, int],
+) -> int:
+    """Escreve um lote de grupos (ano -> instâncias) na Bronze.
+
+    Limpa a partição na primeira vez que um ano aparece nesta execução
+    (anos_limpos) e escreve cada lote em um arquivo part-{index}.parquet
+    próprio (parte_por_ano) — nunca sobrescreve um lote anterior do mesmo
+    ano (fix do B1).
+    """
+    schema = to_pyarrow_schema(modelo)
+    rows_written = 0
+    for ano, grupo in ano_groups.items():
+        if ano not in anos_limpos:
+            bronze_writer.clear_partition(entidade, ano)
+            anos_limpos.add(ano)
+
+        table = to_pyarrow_table(grupo, schema)
+        written = bronze_writer.write_partition(
+            entidade, ano, table, part_index=parte_por_ano[ano]
+        )
+        parte_por_ano[ano] += 1
+        rows_written += written
+    return rows_written
+
+
+def _run_extraction(entidade: str, sql: str) -> None:
+    """Núcleo compartilhado por extract_full/extract_incremental: query -> valida -> escreve -> audita."""
+    _tabela, modelo = ENTITY_TABLE_MAP[entidade]
 
     with log_execution(unit="Bronze_Ingestion", layer="Bronze") as run:
         client = bigquery.Client(project=PROJECT_ID)
         rows = _do_query(client, sql)
-
-        total_rows = getattr(rows, "total_rows", None)
-        if total_rows and total_rows > BATCH_THRESHOLD:
-            row_batches = batched(rows, BATCH_SIZE)
-        else:
-            row_batches = [list(rows)]
+        row_batches = _split_into_batches(rows, getattr(rows, "total_rows", None))
 
         rows_read = 0
         rows_written = 0
+        anos_limpos: set[int] = set()
+        parte_por_ano: dict[int, int] = defaultdict(int)
         for row_batch in row_batches:
-            instancias = []
-            for row in row_batch:
-                record = modelo(**dict(row))
-                instancias.append(record)
-                rows_read += 1
-
-            # Agrupa por ano
-            ano_groups: dict = defaultdict(list)
-            for inst in instancias:
-                ano = getattr(inst, "ano", None) or 0
-                ano_groups[ano].append(inst)
-
-            # Escreve uma partição por ano
-            schema = to_pyarrow_schema(modelo)
-            for ano, grupo in ano_groups.items():
-                table = to_pyarrow_table(grupo, schema)
-                written = bronze_writer.write_partition(entidade, ano, table)
-                rows_written += written
+            instancias = _instantiate_records(row_batch, modelo)
+            rows_read += len(instancias)
+            ano_groups = _group_by_ano(instancias)
+            rows_written += _write_ano_groups(
+                entidade, ano_groups, modelo, anos_limpos, parte_por_ano
+            )
 
         run.rows_read = rows_read
         run.rows_written = rows_written
 
 
+def extract_full(entidade: str) -> None:
+    """Extrai todos os dados de uma entidade do BigQuery para Bronze."""
+    tabela, _modelo = ENTITY_TABLE_MAP[entidade]
+    sql = f"SELECT * FROM `{SOURCE_DATASET}.{tabela}`"
+    _run_extraction(entidade, sql)
+
+
 def extract_incremental(entidade: str) -> None:
     """Extrai apenas os anos novos de uma entidade do BigQuery para Bronze."""
-    tabela, modelo = ENTITY_TABLE_MAP[entidade]
+    tabela, _modelo = ENTITY_TABLE_MAP[entidade]
     existing_years = bronze_reader.list_bronze_years(entidade)
 
     if not existing_years:
@@ -111,41 +153,7 @@ def extract_incremental(entidade: str) -> None:
 
     max_existing = max(existing_years)
     sql = f"SELECT * FROM `{SOURCE_DATASET}.{tabela}` WHERE ano > {max_existing}"
-
-    with log_execution(unit="Bronze_Ingestion", layer="Bronze") as run:
-        client = bigquery.Client(project=PROJECT_ID)
-        rows = _do_query(client, sql)
-
-        total_rows = getattr(rows, "total_rows", None)
-        if total_rows and total_rows > BATCH_THRESHOLD:
-            row_batches = batched(rows, BATCH_SIZE)
-        else:
-            row_batches = [list(rows)]
-
-        rows_read = 0
-        rows_written = 0
-        for row_batch in row_batches:
-            instancias = []
-            for row in row_batch:
-                record = modelo(**dict(row))
-                instancias.append(record)
-                rows_read += 1
-
-            # Agrupa por ano
-            ano_groups: dict = defaultdict(list)
-            for inst in instancias:
-                ano = getattr(inst, "ano", None) or 0
-                ano_groups[ano].append(inst)
-
-            # Escreve uma partição por ano
-            schema = to_pyarrow_schema(modelo)
-            for ano, grupo in ano_groups.items():
-                table = to_pyarrow_table(grupo, schema)
-                written = bronze_writer.write_partition(entidade, ano, table)
-                rows_written += written
-
-        run.rows_read = rows_read
-        run.rows_written = rows_written
+    _run_extraction(entidade, sql)
 
 
 def extract_entity(entidade: str) -> None:

@@ -116,13 +116,11 @@ class TestExtractFull:
     """Verifica extração completa de entidades."""
 
     def test_calls_write_partition_per_year_group(self):
-        mock_rows = []
-        for ano in [2023, 2024]:
-            for _ in range(3):
-                mock_row = MagicMock()
-                mock_row.__iter__ = lambda self, a=[{"ano": ano, "sigla_uf": "SP"}]: iter(a.items())
-                mock_row.__getitem__ = lambda self, key: {"ano": ano, "sigla_uf": "SP"}[key]
-                mock_rows.append(mock_row)
+        mock_rows = [
+            {"ano": ano, "sigla_uf": "SP"}
+            for ano in [2023, 2024]
+            for _ in range(3)
+        ]
 
         mock_rows_iter = MagicMock()
         mock_rows_iter.total_rows = 6
@@ -130,7 +128,8 @@ class TestExtractFull:
 
         with patch("extraction.extraction.bigquery.Client") as mock_bq_client:
             mock_bq_client.return_value.query.return_value.result.return_value = mock_rows_iter
-            with patch("extraction.extraction.bronze_writer.write_partition") as mock_write:
+            with patch("extraction.extraction.bronze_writer.write_partition") as mock_write, \
+                 patch("extraction.extraction.bronze_writer.clear_partition") as mock_clear:
                 mock_write.return_value = 3
                 with patch("extraction.extraction.log_execution") as mock_log:
                     mock_run = MagicMock()
@@ -139,8 +138,38 @@ class TestExtractFull:
 
                     extract_full("uf")
 
-        # Verifica que write_partition foi chamado
+        # Verifica que write_partition foi chamado e que cada ano foi limpo 1x
         assert mock_write.called
+        assert mock_clear.call_count == 2
+        assert {c.args for c in mock_clear.call_args_list} == {("uf", 2023), ("uf", 2024)}
+
+    def test_multi_batch_same_year_clears_once_writes_each_batch(self):
+        """Regressão do B1: clear_partition 1x por ano, write_partition 1x por lote
+        com part_index crescente — nenhum lote sobrescreve o anterior."""
+        mock_rows = [{"ano": 2023, "sigla_uf": "SP"} for _ in range(5)]
+
+        mock_rows_iter = MagicMock()
+        mock_rows_iter.total_rows = 600_000  # acima do BATCH_THRESHOLD, força batching
+        mock_rows_iter.__iter__ = lambda self: iter(mock_rows)
+
+        with patch("extraction.extraction.BATCH_SIZE", 2):
+            with patch("extraction.extraction.bigquery.Client") as mock_bq_client:
+                mock_bq_client.return_value.query.return_value.result.return_value = mock_rows_iter
+                with patch("extraction.extraction.bronze_writer.write_partition") as mock_write, \
+                     patch("extraction.extraction.bronze_writer.clear_partition") as mock_clear:
+                    mock_write.return_value = 2
+                    with patch("extraction.extraction.log_execution") as mock_log:
+                        mock_run = MagicMock()
+                        mock_log.return_value.__enter__ = lambda self: mock_run
+                        mock_log.return_value.__exit__ = lambda self, *a: None
+
+                        extract_full("uf")
+
+        # 5 linhas em lotes de 2 -> 3 lotes (2, 2, 1), todos do ano 2023
+        mock_clear.assert_called_once_with("uf", 2023)
+        assert mock_write.call_count == 3
+        part_indexes = [call.kwargs["part_index"] for call in mock_write.call_args_list]
+        assert part_indexes == [0, 1, 2]
 
     def test_entity_not_in_map_raises(self):
         with patch("extraction.extraction.bigquery.Client"):
