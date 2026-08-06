@@ -38,9 +38,12 @@ clean:
 # --- Terraform (U2 Infrastructure) ---
 
 # Inicializa o Terraform passando o nome do bucket do bootstrap.sh
-# Exemplo de uso: make infra-init PROJECT_ID=useful-space-277919
+# PROJECT_ID vem de: (1) argumento explícito make infra-init PROJECT_ID=x,
+# ou (2) TF_VAR_project_id já exportado no ambiente (ex: após `source .env`)
+PROJECT_ID ?= $(TF_VAR_project_id)
+
 infra-init:
-	@if [ -z "$(PROJECT_ID)" ]; then echo "Erro: Forneça o PROJECT_ID (ex: make infra-init PROJECT_ID=seu-projeto)"; exit 1; fi
+	@if [ -z "$(PROJECT_ID)" ]; then echo "Erro: Forneça o PROJECT_ID (ex: make infra-init PROJECT_ID=seu-projeto, ou rode 'source .env' antes)"; exit 1; fi
 	cd infra && terraform init -backend-config="bucket=$(PROJECT_ID)-tfstate"
 
 infra-plan:
