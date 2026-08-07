@@ -1,4 +1,4 @@
-.PHONY: install test test-u1 test-u4 bronze clean infra-plan infra-apply infra-destroy
+.PHONY: install test test-contracts test-extraction test-streaming bronze streaming-producer streaming-consumer clean infra-plan infra-apply infra-destroy
 
 # O projeto reside num CIFS/SMB share que não suporta symlinks.
 # O venv fica em $HOME/.venvs para evitar o problema.
@@ -15,11 +15,14 @@ install:
 test: install
 	$(PYTEST) tests/
 
-test-u1: install
+test-contracts: install
 	$(PYTEST) tests/contracts/ -v
 
 test-extraction: install
 	$(PYTEST) tests/extraction/ tests/bronze/ -v
+
+test-streaming: install
+	$(PYTEST) tests/streaming/ -v
 
 # --- Bronze Ingestion ---
 
@@ -29,6 +32,15 @@ bronze: install
 		$(PYTHON) -c "from extraction.extraction import extract_entity; extract_entity('$$entity')"; \
 		echo "Entity $$entity done."; \
 	done
+
+# --- Streaming (Producer + Consumer) ---
+
+# Uso: make streaming-producer TIPO=meta N=5
+streaming-producer: install
+	$(PYTHON) -c "from streaming.producer import produce_events; produce_events('$(or $(TIPO),indicador)', n=$(or $(N),1))"
+
+streaming-consumer: install
+	$(PYTHON) -c "from streaming.consumer import consume_batch; consume_batch()"
 
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
