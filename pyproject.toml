@@ -9,6 +9,7 @@ dependencies = [
     "google-cloud-bigquery",
     "google-cloud-storage",
     "google-cloud-monitoring",
+    "google-cloud-pubsub",
 ]
 
 [project.optional-dependencies]
