@@ -79,3 +79,27 @@ resource "google_project_service" "cloudbilling" {
   disable_on_destroy = false
   depends_on         = [google_project_service.cloudresourcemanager]
 }
+
+# Habilita as APIs necessárias para o build/deploy do Cloud Function Gen2
+# (que roda sobre Cloud Run: precisa buildar a imagem via Cloud Build e
+# armazená-la no Artifact Registry, além da própria API de Functions).
+resource "google_project_service" "cloudfunctions" {
+  project            = var.project_id
+  service            = "cloudfunctions.googleapis.com"
+  disable_on_destroy = false
+  depends_on         = [google_project_service.cloudresourcemanager]
+}
+
+resource "google_project_service" "cloudbuild" {
+  project            = var.project_id
+  service            = "cloudbuild.googleapis.com"
+  disable_on_destroy = false
+  depends_on         = [google_project_service.cloudresourcemanager]
+}
+
+resource "google_project_service" "artifactregistry" {
+  project            = var.project_id
+  service            = "artifactregistry.googleapis.com"
+  disable_on_destroy = false
+  depends_on         = [google_project_service.cloudresourcemanager]
+}

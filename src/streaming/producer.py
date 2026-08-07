@@ -162,3 +162,24 @@ def produce_events(tipo_evento: str, n: int = 1) -> None:
             published += 1
 
         run.rows_written = published
+
+
+def cloud_function_entrypoint(request):
+    """Ponto de entrada HTTP para o Cloud Function (Gen2), disparado pelo Cloud Scheduler.
+
+    Aceita `tipo_evento` (default "indicador", sorteado entre os 3 tipos se
+    omitido) e `n` (default 1) via query string ou corpo JSON. Retorna uma
+    tupla (corpo, status) no formato esperado pelo Functions Framework.
+    """
+    args = request.args or {}
+    body = request.get_json(silent=True) or {}
+
+    tipo_evento = args.get("tipo_evento") or body.get("tipo_evento") or random.choice(list(EVENT_TYPE_MODELS))
+    n = int(args.get("n") or body.get("n") or 1)
+
+    try:
+        produce_events(tipo_evento, n=n)
+    except Exception as exc:
+        return f"Falha ao produzir eventos: {type(exc).__name__}: {exc}", 500
+
+    return f"Publicados {n} eventos do tipo {tipo_evento}", 200

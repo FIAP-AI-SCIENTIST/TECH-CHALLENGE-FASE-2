@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from streaming.producer import (
     EVENT_TYPE_MODELS,
     _do_publish,
+    cloud_function_entrypoint,
     gerar_evento_sintetico,
     produce_events,
 )
@@ -120,3 +121,40 @@ class TestProduceEvents:
         _, kwargs = mock_client_cls.return_value.publish.call_args
         assert "tipo_evento" in kwargs
         assert "entidade" in kwargs
+
+
+
+class TestCloudFunctionEntrypoint:
+    """Verifica o handler HTTP usado pelo Cloud Function (Gen2)."""
+
+    def _make_request(self, args=None, json_body=None):
+        request = MagicMock()
+        request.args = args or {}
+        request.get_json.return_value = json_body
+        return request
+
+    def test_uses_query_string_params(self):
+        request = self._make_request(args={"tipo_evento": "meta", "n": "2"})
+        with patch("streaming.producer.produce_events") as mock_produce:
+            body, status = cloud_function_entrypoint(request)
+
+        mock_produce.assert_called_once_with("meta", n=2)
+        assert status == 200
+
+    def test_defaults_when_no_params(self):
+        request = self._make_request()
+        with patch("streaming.producer.produce_events") as mock_produce:
+            body, status = cloud_function_entrypoint(request)
+
+        mock_produce.assert_called_once()
+        args, kwargs = mock_produce.call_args
+        assert args[0] in EVENT_TYPE_MODELS
+        assert kwargs["n"] == 1
+        assert status == 200
+
+    def test_returns_500_on_failure(self):
+        request = self._make_request(args={"tipo_evento": "meta"})
+        with patch("streaming.producer.produce_events", side_effect=RuntimeError("boom")):
+            body, status = cloud_function_entrypoint(request)
+
+        assert status == 500

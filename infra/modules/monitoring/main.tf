@@ -5,7 +5,7 @@ resource "google_monitoring_notification_channel" "email_alert" {
   project      = var.project_id
   display_name = "Alerta Pipeline Educação"
   type         = "email"
-  
+
   labels = {
     email_address = var.alert_email
   }
@@ -17,7 +17,7 @@ resource "google_monitoring_alert_policy" "pipeline_error_alert" {
   project      = var.project_id
   display_name = "Erro no Pipeline de Alfabetizacao"
   combiner     = "OR"
-  
+
   conditions {
     display_name = "Log matching ERROR"
     condition_matched_log {
