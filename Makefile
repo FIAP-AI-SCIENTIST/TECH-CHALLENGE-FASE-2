@@ -46,6 +46,7 @@ streaming-consumer: install
 # Precisa rodar antes de infra-plan/infra-apply quando o código do Producer mudar.
 package-producer:
 	bash infra/scripts/package_producer.sh
+
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
 	find . -type d -name ".pytest_cache" -exec rm -rf {} +
