@@ -97,13 +97,14 @@ def _write_ano_groups(
     schema = to_pyarrow_schema(modelo)
     rows_written = 0
     for ano, grupo in ano_groups.items():
+        chave = f"ano={ano}"
         if ano not in anos_limpos:
-            bronze_writer.clear_partition(entidade, ano)
+            bronze_writer.clear_partition(entidade, chave)
             anos_limpos.add(ano)
 
         table = to_pyarrow_table(grupo, schema)
         written = bronze_writer.write_partition(
-            entidade, ano, table, part_index=parte_por_ano[ano]
+            entidade, chave, table, part_index=parte_por_ano[ano]
         )
         parte_por_ano[ano] += 1
         rows_written += written

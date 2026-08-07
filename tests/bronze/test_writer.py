@@ -15,19 +15,24 @@ from bronze.writer import (
 
 
 class TestBuildPartitionPath:
-    """Verifica construção de caminhos de partição."""
+    """Verifica construção de caminhos de partição (chave genérica, já formatada)."""
 
     def test_basic_path(self):
-        result = build_partition_path("uf", 2023)
+        result = build_partition_path("uf", "ano=2023")
         assert result == "bronze/uf/ano=2023/"
 
     def test_different_entity_and_year(self):
-        result = build_partition_path("municipio", 2024)
+        result = build_partition_path("municipio", "ano=2024")
         assert result == "bronze/municipio/ano=2024/"
 
     def test_alunos_entity(self):
-        result = build_partition_path("alunos", 2025)
+        result = build_partition_path("alunos", "ano=2025")
         assert result == "bronze/alunos/ano=2025/"
+
+    def test_date_ingestion_key(self):
+        """Chave de particionamento por data (streaming), não apenas ano."""
+        result = build_partition_path("alunos", "data_ingestao=2026-08-06")
+        assert result == "bronze/alunos/data_ingestao=2026-08-06/"
 
 
 class TestWritePartition:
@@ -35,7 +40,7 @@ class TestWritePartition:
 
     write_partition NUNCA apaga nada — só escreve o arquivo do lote.
     Limpeza da partição é responsabilidade exclusiva de clear_partition,
-    chamada pelo caller uma única vez por (entidade, ano) por execução.
+    chamada pelo caller uma única vez por (entidade, chave) por execução.
     """
 
     def _make_table(self, num_rows: int = 10) -> pa.Table:
@@ -53,7 +58,7 @@ class TestWritePartition:
             mock_blob = MagicMock()
             mock_bucket.blob.return_value = mock_blob
 
-            rows_written = write_partition("uf", 2023, table, part_index=0)
+            rows_written = write_partition("uf", "ano=2023", table, part_index=0)
 
         assert rows_written == 42
 
@@ -66,7 +71,7 @@ class TestWritePartition:
             mock_blob = MagicMock()
             mock_bucket.blob.return_value = mock_blob
 
-            write_partition("uf", 2023, table, part_index=0)
+            write_partition("uf", "ano=2023", table, part_index=0)
 
         mock_bucket.list_blobs.assert_not_called()
 
@@ -78,13 +83,28 @@ class TestWritePartition:
             mock_blob = MagicMock()
             mock_bucket.blob.return_value = mock_blob
 
-            write_partition("uf", 2023, table, part_index=0)
+            write_partition("uf", "ano=2023", table, part_index=0)
 
         mock_bucket.blob.assert_called_once_with("bronze/uf/ano=2023/part-0.parquet")
         mock_blob.upload_from_string.assert_called_once()
 
+    def test_uploads_with_date_ingestion_key(self):
+        """Regressão: escrita usando chave de data (streaming), não só ano."""
+        table = self._make_table()
+        with patch("bronze.writer.storage.Client") as mock_client_cls:
+            mock_bucket = MagicMock()
+            mock_client_cls.return_value.bucket.return_value = mock_bucket
+            mock_blob = MagicMock()
+            mock_bucket.blob.return_value = mock_blob
+
+            write_partition("alunos", "data_ingestao=2026-08-06", table, part_index=0)
+
+        mock_bucket.blob.assert_called_once_with(
+            "bronze/alunos/data_ingestao=2026-08-06/part-0.parquet"
+        )
+
     def test_multiple_batches_write_separate_files(self):
-        """Regressão do B1: lotes diferentes do mesmo ano nunca se sobrescrevem."""
+        """Regressão do B1: lotes diferentes da mesma chave nunca se sobrescrevem."""
         table = self._make_table(num_rows=5)
         with patch("bronze.writer.storage.Client") as mock_client_cls:
             mock_bucket = MagicMock()
@@ -92,8 +112,8 @@ class TestWritePartition:
             mock_blob = MagicMock()
             mock_bucket.blob.return_value = mock_blob
 
-            write_partition("uf", 2023, table, part_index=0)
-            write_partition("uf", 2023, table, part_index=1)
+            write_partition("uf", "ano=2023", table, part_index=0)
+            write_partition("uf", "ano=2023", table, part_index=1)
 
         assert mock_bucket.blob.call_args_list == [
             (("bronze/uf/ano=2023/part-0.parquet",),),
@@ -112,7 +132,7 @@ class TestClearPartition:
             old_blob = MagicMock()
             mock_bucket.list_blobs.return_value = [old_blob]
 
-            clear_partition("uf", 2023)
+            clear_partition("uf", "ano=2023")
 
         old_blob.delete.assert_called_once()
 
@@ -122,4 +142,4 @@ class TestClearPartition:
             mock_client_cls.return_value.bucket.return_value = mock_bucket
             mock_bucket.list_blobs.return_value = []
 
-            clear_partition("uf", 2023)  # não deve levantar exceção
+            clear_partition("uf", "ano=2023")  # não deve levantar exceção

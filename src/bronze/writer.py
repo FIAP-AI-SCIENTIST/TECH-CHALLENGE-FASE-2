@@ -13,19 +13,25 @@ BUCKET_NAME = "useful-space-277919-datalake"
 TIMEOUT_SECONDS = 10
 
 
-def build_partition_path(entidade: str, ano: int) -> str:
-    """Constrói o caminho GCS para uma partição."""
-    return f"bronze/{entidade}/ano={ano}/"
+def build_partition_path(entidade: str, chave: str) -> str:
+    """Constrói o caminho GCS para uma partição.
+
+    ``chave`` já vem formatada pelo caller (ex: "ano=2023",
+    "data_ingestao=2026-08-06") — esta função não sabe nem precisa saber
+    o significado da chave, só concatena.
+    """
+    return f"bronze/{entidade}/{chave}/"
 
 
-def write_partition(entidade: str, ano: int, table: pa.Table, part_index: int) -> int:
-    """Escreve uma partição Parquet no GCS, sobrescrevendo partições existentes.
+def write_partition(entidade: str, chave: str, table: pa.Table, part_index: int) -> int:
+    """Escreve um arquivo de lote na partição, sem apagar nada existente.
 
-    serializa a tabela para Parquet e faz upload como part-INDEX.parquet.
-    Retorna o número de linhas escritas.
+    Serializa a tabela para Parquet e faz upload como part-{part_index}.parquet.
+    Retorna o número de linhas escritas. Limpeza da partição é responsabilidade
+    exclusiva de clear_partition, chamada pelo caller antes do primeiro lote.
     """
     client = storage.Client()
-    prefix = build_partition_path(entidade, ano)
+    prefix = build_partition_path(entidade, chave)
     bucket = client.bucket(BUCKET_NAME)
 
     # Serializa para Parquet
@@ -39,18 +45,21 @@ def write_partition(entidade: str, ano: int, table: pa.Table, part_index: int) -
 
     return table.num_rows
 
-def clear_partition(entidade: str, ano: int) -> None:
-    client = storage.Client()
-    prefix = build_partition_path(entidade, ano)
 
-    # Remove blobs existentes (overwrite)
+def clear_partition(entidade: str, chave: str) -> None:
+    """Remove todos os blobs existentes sob a partição (overwrite).
+
+    Chamada uma única vez por (entidade, chave) por execução, antes do
+    primeiro lote — nunca de dentro de write_partition.
+    """
+    client = storage.Client()
+    prefix = build_partition_path(entidade, chave)
     _delete_blobs_under_prefix(client, BUCKET_NAME, prefix)
 
 
 @with_retry()
 def _delete_blobs_under_prefix(client: storage.Client, bucket_name: str, prefix: str) -> None:
     """Remove todos os blobs sob o prefixo especificado."""
-    bucket = client.bucket(bucket_name)
     blobs = list(_list_blobs_with_prefix(client, bucket_name, prefix))
     for blob in blobs:
         blob.delete(timeout=TIMEOUT_SECONDS)
@@ -67,4 +76,3 @@ def _list_blobs_with_prefix(client: storage.Client, bucket_name: str, prefix: st
 def _upload_blob(blob: storage.Blob, buffer: io.BytesIO) -> None:
     """Faz upload de um buffer para o blob especificado."""
     blob.upload_from_string(buffer.read(), content_type="application/octet-stream", timeout=TIMEOUT_SECONDS)
-

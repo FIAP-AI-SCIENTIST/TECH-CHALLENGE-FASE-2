@@ -141,7 +141,7 @@ class TestExtractFull:
         # Verifica que write_partition foi chamado e que cada ano foi limpo 1x
         assert mock_write.called
         assert mock_clear.call_count == 2
-        assert {c.args for c in mock_clear.call_args_list} == {("uf", 2023), ("uf", 2024)}
+        assert {c.args for c in mock_clear.call_args_list} == {("uf", "ano=2023"), ("uf", "ano=2024")}
 
     def test_multi_batch_same_year_clears_once_writes_each_batch(self):
         """Regressão do B1: clear_partition 1x por ano, write_partition 1x por lote
@@ -166,7 +166,7 @@ class TestExtractFull:
                         extract_full("uf")
 
         # 5 linhas em lotes de 2 -> 3 lotes (2, 2, 1), todos do ano 2023
-        mock_clear.assert_called_once_with("uf", 2023)
+        mock_clear.assert_called_once_with("uf", "ano=2023")
         assert mock_write.call_count == 3
         part_indexes = [call.kwargs["part_index"] for call in mock_write.call_args_list]
         assert part_indexes == [0, 1, 2]
