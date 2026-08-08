@@ -1,4 +1,4 @@
-.PHONY: install test test-contracts test-extraction test-streaming bronze streaming-producer streaming-consumer clean package-producer infra-plan infra-apply infra-destroy
+.PHONY: install test test-contracts test-extraction test-streaming bronze streaming-producer streaming-consumer clean package-producer infra-init infra-plan infra-apply infra-destroy
 
 # O projeto reside num CIFS/SMB share que não suporta symlinks.
 # O venv fica em $HOME/.venvs para evitar o problema.
