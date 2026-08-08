@@ -1,37 +1,110 @@
-# Pipeline de Dados — Alfabetização (Tech Challenge Fase 2)
+# Pipeline Híbrido de Análise da Alfabetização no Brasil
 
-Pipeline de dados nativo GCP para os indicadores de alfabetização do INEP
-(fonte pública `basedosdados.br_inep_avaliacao_alfabetizacao`). Extrai do
-BigQuery público, valida contra contratos Pydantic e grava a camada Bronze
-particionada por ano no Cloud Storage.
+Tech Challenge Fase 2 (Pós FIAP) — pipeline de dados híbrido (batch + streaming) 100% nativo GCP para o **Indicador Criança Alfabetizada** (INEP, Pesquisa Alfabetiza Brasil 2023), fonte pública `basedosdados.br_inep_avaliacao_alfabetizacao` (BigQuery público).
+
+## Contexto de negócio
+
+O Compromisso Nacional Criança Alfabetizada é uma política pública (União + estados + DF + municípios) que busca garantir que toda criança brasileira esteja alfabetizada até o fim do 2º ano do ensino fundamental, com meta de 100% até 2030. O Indicador Criança Alfabetizada mede o percentual de estudantes que atingem o corte de 743 pontos na escala Saeb. Entender os fatores que influenciam esse resultado exige cruzar metas nacionais/estaduais/municipais, dados territoriais e desempenho — dados que a Base dos Dados expõe nativamente via BigQuery.
+
+Este projeto simula o trabalho de um time de engenharia de dados de uma organização pública de análise educacional, entregando uma camada analítica confiável para subsidiar políticas públicas baseadas em evidência.
+
+## Arquitetura
+
+Arquitetura Lambda (camada batch + camada streaming convergindo na mesma camada Bronze), seguindo o padrão Medalhão (Bronze → Silver → Gold), 100% GCP.
+
+```mermaid
+flowchart LR
+    subgraph Fonte
+        BD[(BigQuery público\nbasedosdados)]
+    end
+
+    subgraph Batch
+        BD -->|extract_full / extract_incremental| Extraction[extraction]
+    end
+
+    subgraph Streaming
+        Scheduler[Cloud Scheduler\ncron] -->|HTTP + OIDC| CF[Cloud Function Gen2\nproducer]
+        CF -->|publish| Topic[(Pub/Sub\nalfabetizacao-streaming-events)]
+        Topic --> Consumer[consumer\npull + ack]
+    end
+
+    Extraction --> Bronze[(GCS — Bronze\nParquet particionado)]
+    Consumer --> Bronze
+
+    Bronze -.próxima unit.-> Silver[(Silver\nGCS/Parquet)]
+    Silver -.próxima unit.-> Gold[(Gold\nBigQuery, modelo dimensional)]
+
+    Extraction --> Audit[(BigQuery\naudit_log)]
+    Consumer --> Audit
+    Audit --> Alert[Alerta e-mail\nMonitoring]
+```
+
+- **Fonte**: BigQuery público (`basedosdados.br_inep_avaliacao_alfabetizacao`), sem exportação intermediária.
+- **Batch**: `extraction.extract_full`/`extract_incremental` lêem do BigQuery público e gravam Parquet particionado por entidade/ano na Bronze (GCS). Full na primeira execução, incremental nas seguintes; lotes acima de `BATCH_THRESHOLD` são escritos em múltiplos arquivos por partição (`part-{n}.parquet`), sem apagar lotes anteriores.
+- **Streaming**: `producer` gera eventos sintéticos (indicador/medição/meta) e publica no tópico Pub/Sub `alfabetizacao-streaming-events`, disparado por Cloud Scheduler via Cloud Function (Gen2). `consumer` faz pull da subscription, decodifica pelo contrato Pydantic correspondente e grava micro-batches na mesma Bronze.
+- **Contratos**: modelos Pydantic (`contracts/models.py`) validam e serializam para Arrow/Parquet, garantindo que Bronze batch e Bronze streaming escrevam sob o mesmo schema por entidade.
+- **Observabilidade**: cada execução (batch ou streaming) registra uma linha na tabela de auditoria BigQuery (`audit_log`) com linhas lidas/escritas, duração e status; logs estruturados em JSON; Consumer Lag do Pub/Sub monitorado via `num_undelivered_messages`; alerta por e-mail em erro.
+- **Silver e Gold** são as próximas units do roadmap (modelagem dimensional Kimball, SCD Tipo 2, integração das bases) — ainda não implementadas; a Bronze já está pronta para alimentá-las.
+
+## Stack e por que essas escolhas
+
+| Camada | Tecnologia | Justificativa |
+|---|---|---|
+| Extração/Streaming | Python + `google-cloud-bigquery`/`google-cloud-pubsub` | Sem Spark/Airflow self-hosted — volume da fonte (~4M linhas na maior entidade) não justifica cluster distribuído; Python simples cobre o caso |
+| Formato de dados | Parquet particionado (hive-style) | Colunar, compressão eficiente, leitura seletiva por partição — custo de storage e de query menor |
+| Streaming transporte | Pub/Sub (não Kafka) | Ver seção de trade-offs abaixo |
+| Contratos de dados | Pydantic | Único schema por entidade compartilhado entre extração batch, producer e consumer streaming — evita drift de schema entre os dois caminhos que convergem na Bronze |
+| IaC | Terraform | Infra 100% efêmera e reproduzível — sobe para demo, `terraform destroy` depois |
+| Compute do Producer | Cloud Function Gen2 + Cloud Scheduler | Serverless, free tier, sem servidor para manter no ar entre execuções |
+| Observabilidade | Cloud Logging + tabela de auditoria BigQuery + Monitoring | Suficiente para o escopo (sem dashboard dedicado); tudo dentro do free tier |
+
+## Trade-offs arquiteturais
+
+**Cloud única (GCP), não multi-cloud.** A fonte de dados (Base dos Dados/INEP) mora nativamente no BigQuery — não existe equivalente na AWS/Azure. Mesmo com uma camada de abstração multi-cloud, a extração continuaria presa ao GCP; portabilizar o resto seria engenharia sem retorno. Tirar os dados do BigQuery público para processar em outra nuvem geraria custo real de egress, o que colide direto com o orçamento free-tier do projeto. Terraform também não abstrai providers de forma nativa — "agnóstico" significaria manter 2-3 implementações paralelas por módulo, triplicando a superfície de bugs para um requisito que o desafio não pede (pede escolha justificada, não portabilidade).
+
+**Pub/Sub em vez de Kafka.** O padrão publish/subscribe é o mesmo ensinado no curso (tópico → subscription/consumer group, semântica at-least-once, monitoramento de lag), mas Kafka self-hosted (ou mesmo um serviço gerenciado como Confluent Cloud/MSK) não tem free tier real, e o projeto já está comprometido com um único provedor gerenciado (GCP). Pub/Sub cobre o mesmo conceito curricular (publish/subscribe, consumer lag, entrega at-least-once) dentro do orçamento zero.
+
+**Sem camada de staging antes da Bronze.** O curso ensina uma camada de staging (pouso bruto antes de qualquer contrato) antes da Bronze. Como a fonte já é uma tabela estruturada e confiável do BigQuery público (não um arquivo solto ou API instável), a extração aplica o contrato Pydantic direto na leitura e grava já na Bronze — o staging existiria só para reformatar algo que já chega formatado.
+
+**Parquet puro (overwrite por partição), sem open table format (Delta/Iceberg/Hudi).** Sem ACID multi-writer nem time travel — cada partição é reescrita por execução, sob controle explícito do writer (uma limpeza por `(entidade, ano)` no início do run, um arquivo por lote depois). Funciona para o volume e a cadência atuais; se a Silver (SCD Tipo 2) precisar de merge incremental mais sofisticado, um open table format entra como candidato natural nessa unit futura.
+
+**NoSQL fora do MVP.** Pelo CAP Theorem e pela decisão de persistência poliglota, o projeto não introduz um banco NoSQL de serving no MVP — o BigQuery (Gold, unit futura) já cobre consulta analítica dimensional. Um caso de uso de IA aplicada (ex.: buscar municípios com perfil educacional similar via embeddings, servidos por um banco vetorial) fica registrado como extensão natural pós-MVP, não como lacuna do design atual.
+
+## FinOps
+
+- **Orçamento**: `google_billing_budget` monitorando a conta de faturamento, alerta em 50%/90%/100% de R$ 1,00 — o GCP não aceita um valor de budget zero, então R$ 1,00 é o menor teto configurável para sinalizar qualquer gasto que fuja do free tier, não um limite de consumo esperado.
+- **Free tier estrito**: nenhum serviço sem free tier generoso entra no design (sem Dataflow, Composer ou Dataproc); GCS, BigQuery (1TB de query/mês), Pub/Sub (10GB/mês) e Cloud Functions (2M invocações/mês) cobrem o volume do projeto.
+- **Infraestrutura efêmera**: todo o Terraform é desenhado para subir e cair sem sujeira — bucket com `force_destroy`, dataset com `delete_contents_on_destroy = true`, tabela de auditoria sem `deletion_protection`. Suba só para testar/demonstrar, rode `make infra-destroy` depois.
+- **Egress**: co-localizar o processamento na mesma nuvem da fonte (BigQuery público) evita custo de transferência entre nuvens — ver trade-off de cloud única acima.
+- **Least privilege como controle de custo indireto**: a service account central (`alfabetizacao-pipeline-sa`) só tem os papéis mínimos por recurso (Storage Object Admin no bucket específico, BigQuery Data Editor no dataset específico, Pub/Sub Publisher/Subscriber no tópico/subscription específicos) — reduz a superfície de uso indevido de cota.
+
+## Estrutura do repositório
 
 ```
 src/
-├── contracts/     # Modelos Pydantic (schema de cada entidade) + serialização Parquet
-├── extraction/     # Extração full/incremental do BigQuery público -> Bronze
-├── bronze/         # Leitura/escrita de partições Parquet no GCS
-├── common/         # Retry compartilhado
-└── observability/  # Logging, auditoria e monitoramento de cada execução
-infra/              # Terraform: toda a infra GCP (efêmera — sobe e destrói por demanda)
+├── contracts/       # Modelos Pydantic (schema por entidade) + mapeamento Arrow + serialização Parquet
+├── extraction/       # Extração full/incremental do BigQuery público -> Bronze
+├── bronze/           # Leitura/escrita de partições Parquet no GCS
+├── streaming/         # Producer (eventos sintéticos -> Pub/Sub) e Consumer (Pub/Sub -> Bronze)
+├── common/            # Retry compartilhado (backoff exponencial)
+└── observability/     # Logging estruturado, auditoria BigQuery e monitoramento (Consumer Lag)
+infra/                 # Terraform: toda a infra GCP (efêmera — sobe e destrói por demanda)
+tests/                 # Testes espelhando src/, incluindo Property-Based Testing (Hypothesis)
 ```
 
 ## Pré-requisitos
 
-- [`gcloud` CLI](https://cloud.google.com/sdk/docs/install) autenticado
+- [`gcloud` CLI](https://cloud.google.com/sdk/docs/install) autenticado, com acesso IAM ao projeto GCP alvo
 - [Terraform](https://developer.hashicorp.com/terraform/install) (provider `google ~> 5.0`)
-- Acesso IAM ao projeto GCP `useful-space-277919` — **peça pro Thyago te
-  adicionar** antes de continuar (todo o grupo recebe `roles/editor`, então
-  qualquer um consegue rodar `apply`/`destroy`, não só o Thyago)
+- Python >= 3.11
 
 ## 1. Configurar credenciais
 
 ```bash
-# Login com a conta que recebeu acesso IAM ao projeto
 gcloud auth login
 gcloud auth application-default login
 
-# Variáveis de ambiente do Terraform (nunca commitar o resultado — já está no .gitignore)
-cp .env.example .env
+cp .env.example .env   # preencher com os valores do projeto (nunca commitar o .env real)
 ```
 
 Edite o `.env` e preencha `TF_VAR_billing_account` e `TF_VAR_alert_email` com
@@ -49,52 +122,63 @@ grupo**, não só o seu e-mail.
 source .env
 ```
 
-**Alternativa ao `.env`:** se preferir não exportar variáveis no shell, copie
-`infra/terraform.tfvars.example` para `infra/terraform.tfvars` e preencha os
-mesmos valores lá dentro (arquivo `.tfvars`, não `.env` — sintaxe HCL, sem
-`export`). Os dois fazem a mesma coisa; use um ou outro, nunca os dois juntos
-(o Terraform lê ambos, e se divergirem o `.tfvars` tem prioridade sobre a
-variável de ambiente, o que confunde quem não sabe disso). `terraform.tfvars`
-também está no `.gitignore` — nunca commite o seu, mesma regra do `.env`.
-
-## 2. Subir a infra
+## 2. Subir a infraestrutura
 
 ```bash
-make infra-init PROJECT_ID=$TF_VAR_project_id   # só na primeira vez (ou se o .terraform/ sumir)
-make infra-plan                                 # confira o que vai ser criado antes de aplicar
-make infra-apply                                # cria dataset BigQuery, bucket GCS, Pub/Sub, SA, budget, monitoring
+make infra-init PROJECT_ID=$TF_VAR_project_id   # só na primeira vez (ou se infra/.terraform sumir)
+make infra-plan                                  # empacota o Producer e mostra o que será criado
+make infra-apply                                 # cria dataset BigQuery, bucket GCS, Pub/Sub, SA, budget, monitoring, Cloud Function + Scheduler
 ```
 
-`infra-apply` só roda a partir da branch `main` sincronizada com o `origin`
-(`infra/apply-guard.sh` barra isso de propósito, pra evitar dois aplicando
-mudanças conflitantes em paralelo). Se ele reclamar, faça `git checkout main
-&& git pull` primeiro.
+`infra-apply` só roda a partir da branch `main`, com a working tree limpa e sincronizada com `origin/main` (`infra/apply-guard.sh` bloqueia isso de propósito, para evitar duas pessoas aplicando mudanças conflitantes em paralelo no mesmo projeto GCP compartilhado).
 
-Ao final, os outputs mostram o bucket e a Service Account criados:
-```
-datalake_bucket           = "useful-space-277919-datalake"
-pipeline_service_account  = "alfabetizacao-pipeline-sa@useful-space-277919.iam.gserviceaccount.com"
-```
-
-## 3. Testar
+## 3. Rodar e testar
 
 ```bash
-make install          # cria venv e instala o pacote em modo dev
-make test             # roda toda a suíte
-make bronze           # extrai as 6 entidades do BigQuery público pra Bronze (GCS)
+make install                                     # cria venv e instala o pacote em modo dev
+make test                                        # roda toda a suíte (contratos, bronze, extração, observabilidade, streaming)
+
+make bronze                                      # extrai as 6 entidades do BigQuery público -> Bronze (batch)
+make streaming-producer TIPO=indicador N=5        # publica 5 eventos sintéticos no Pub/Sub
+make streaming-consumer                          # consome o lote disponível e grava na Bronze
 ```
 
-## 4. Destruir a infra — **sempre que terminar de testar**
+Em produção, o Producer roda sozinho via Cloud Scheduler → Cloud Function (sem intervenção manual); o Consumer, por ora, roda sob demanda (`make streaming-consumer`) — um pull single-shot não tem o mesmo encaixe natural de agendamento que o Producer tem.
 
-O projeto tem orçamento de **R$ 1,00** configurado (`infra/modules/budget`)
-só pra alertar se sair do Free Tier — não é um limite automático que corta o
-projeto. Deixar a infra no ar sem uso pode gerar cobrança de verdade.
+## 4. Destruir a infraestrutura — sempre que terminar de testar
 
 ```bash
 make infra-destroy
 ```
 
-Todos os recursos foram desenhados pra serem efêmeros de propósito
-(`delete_contents_on_destroy = true` no dataset, `deletion_protection = false`
-na tabela de auditoria) — o `destroy` funciona limpo, sem sujeira. **Não
-deixe a infra provisionada depois do seu teste.**
+Todos os recursos foram desenhados para serem efêmeros de propósito — o `destroy` funciona limpo, sem sujeira. Não deixe a infra provisionada depois do seu teste; o orçamento de R$ 1,00 é só um alerta, não um limite automático que corta o projeto.
+
+## Qualidade e testes
+
+Suíte de testes unitários e de contrato por camada (`tests/`), incluindo Property-Based Testing (Hypothesis) nas funções puras de contratos (round-trip de serialização, invariantes de schema). Validação de qualidade de dados (duplicidade, nulos, chaves, consistência) fica para a unit de Data Quality, sobre Silver/Gold.
+
+## Aplicação em IA
+
+A camada Gold (modelo dimensional, unit futura) é o ponto natural para alimentar modelos preditivos e analíticos sobre o indicador de alfabetização:
+
+- **Predição de risco de não-alfabetização**: modelo supervisionado (features territoriais + metas históricas + série temporal por município) para sinalizar municípios/escolas com maior probabilidade de ficar abaixo da meta, permitindo intervenção antes do resultado da avaliação.
+- **Desigualdade educacional**: clusterização de municípios por perfil socioeducacional (combinando indicador de alfabetização com dados territoriais) para identificar grupos comparáveis e medir o efeito real de políticas públicas, isolando o contexto socioeconômico.
+- **Apoio à decisão de política pública**: séries temporais por UF/município para simular cenários ("o que aconteceria com a meta nacional se a UF X replicasse a trajetória da UF Y") e priorizar investimento onde o retorno marginal em alfabetização é maior.
+- **Busca por similaridade**: um banco vetorial sobre embeddings de perfil municipal (ver trade-off de NoSQL acima) permitiria consultas como "encontrar municípios com contexto parecido ao do município X" — útil para transferência de boas práticas entre gestões locais comparáveis.
+
+Nenhum desses modelos está implementado neste MVP — dependem da Gold materializada (Silver/Gold são as próximas units); a arquitetura atual (contratos tipados, Bronze imutável, Gold dimensional planejada) já organiza os dados no formato que esse tipo de modelo consome.
+
+## Roadmap
+
+- [x] Contratos de dados (Pydantic + Arrow/Parquet)
+- [x] Infraestrutura base (Terraform: storage, BigQuery, Pub/Sub, IAM, budget, monitoring)
+- [x] Observabilidade (logging, auditoria, monitoramento)
+- [x] Bronze — ingestão batch (extração full/incremental do BigQuery público)
+- [x] Bronze — ingestão streaming (Producer sintético + Consumer, Cloud Function + Scheduler)
+- [ ] Silver — limpeza, padronização, normalização de chaves, SCD Tipo 2
+- [ ] Gold — modelo dimensional (Kimball) materializado no BigQuery
+- [ ] Data Quality — testes de qualidade mapeados às seis dimensões (dbt/Great Expectations)
+
+## Evidências de execução
+
+_(a preencher com prints/link de vídeo de cada camada rodando de verdade — ver seção de entrega)._
