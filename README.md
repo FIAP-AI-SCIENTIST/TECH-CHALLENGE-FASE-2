@@ -49,6 +49,14 @@ grupo**, não só o seu e-mail.
 source .env
 ```
 
+**Alternativa ao `.env`:** se preferir não exportar variáveis no shell, copie
+`infra/terraform.tfvars.example` para `infra/terraform.tfvars` e preencha os
+mesmos valores lá dentro (arquivo `.tfvars`, não `.env` — sintaxe HCL, sem
+`export`). Os dois fazem a mesma coisa; use um ou outro, nunca os dois juntos
+(o Terraform lê ambos, e se divergirem o `.tfvars` tem prioridade sobre a
+variável de ambiente, o que confunde quem não sabe disso). `terraform.tfvars`
+também está no `.gitignore` — nunca commite o seu, mesma regra do `.env`.
+
 ## 2. Subir a infra
 
 ```bash
