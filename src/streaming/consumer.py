@@ -55,13 +55,17 @@ def _do_ack(client: pubsub_v1.SubscriberClient, subscription: str, ack_ids: list
     )
 
 
-def consume_batch(max_messages: int = 10, timeout: float = 5.0) -> None:
+def consume_batch(max_messages: int = 10) -> None:
     """Consome um micro-batch de eventos e grava na Bronze — execução single-shot.
 
     Cada mensagem é processada e ackada independentemente: uma mensagem
     malformada não impede o ack das demais que deram certo (isolamento
     por mensagem). Ack só acontece depois da escrita confirmada na Bronze
     (garante at-least-once, NFR05).
+
+    A escrita é append-only: a partição do dia acumula um arquivo por
+    execução e nunca é limpa, então rodar o consumer várias vezes no mesmo
+    dia soma micro-batches em vez de substituí-los.
     """
     logger = setup_logger()
 
@@ -99,20 +103,19 @@ def consume_batch(max_messages: int = 10, timeout: float = 5.0) -> None:
 
             grupos[entidade].append((instancia, modelo, msg.ack_id))
 
-        chaves_limpas: set = set()
         rows_written = 0
         for entidade, itens in grupos.items():
-            if entidade not in chaves_limpas:
-                bronze_writer.clear_partition(entidade, chave)
-                chaves_limpas.add(entidade)
-
             instancias = [i for i, _m, _a in itens]
             modelo = itens[0][1]
             schema = to_pyarrow_schema(modelo)
             table = to_pyarrow_table(instancias, schema)
 
             try:
-                written = bronze_writer.write_partition(entidade, chave, table, part_index=0)
+                # Nunca limpa a partição: "data_ingestao=<hoje>" é compartilhada
+                # por todos os micro-batches do dia. O part_id é o run_id desta
+                # execução, então o arquivo nunca colide com o de um run anterior
+                # e a Bronze mantém o histórico completo do dia.
+                written = bronze_writer.write_partition(entidade, chave, table, part_id=run.run_id)
                 rows_written += written
                 ack_ids_ok.extend(ack_id for _i, _m, ack_id in itens)
             except Exception as exc:

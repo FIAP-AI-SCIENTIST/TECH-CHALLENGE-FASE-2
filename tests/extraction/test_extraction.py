@@ -145,7 +145,7 @@ class TestExtractFull:
 
     def test_multi_batch_same_year_clears_once_writes_each_batch(self):
         """Regressão do B1: clear_partition 1x por ano, write_partition 1x por lote
-        com part_index crescente — nenhum lote sobrescreve o anterior."""
+        com part_id crescente — nenhum lote sobrescreve o anterior."""
         mock_rows = [{"ano": 2023, "sigla_uf": "SP"} for _ in range(5)]
 
         mock_rows_iter = MagicMock()
@@ -168,8 +168,8 @@ class TestExtractFull:
         # 5 linhas em lotes de 2 -> 3 lotes (2, 2, 1), todos do ano 2023
         mock_clear.assert_called_once_with("uf", "ano=2023")
         assert mock_write.call_count == 3
-        part_indexes = [call.kwargs["part_index"] for call in mock_write.call_args_list]
-        assert part_indexes == [0, 1, 2]
+        part_ids = [call.kwargs["part_id"] for call in mock_write.call_args_list]
+        assert part_ids == ["0", "1", "2"]
 
     def test_entity_not_in_map_raises(self):
         with patch("extraction.extraction.bigquery.Client"):

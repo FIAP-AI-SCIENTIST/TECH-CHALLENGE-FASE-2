@@ -53,7 +53,7 @@ class TestDoAck:
 class TestConsumeBatch:
     """Verifica orquestração do micro-batch: decodifica, escreve, acka, checa lag."""
 
-    def _run_with_messages(self, messages):
+    def _run_with_messages(self, messages, run_id: str = "run-1"):
         with patch("streaming.consumer.pubsub_v1.SubscriberClient") as mock_client_cls:
             mock_client_cls.return_value.subscription_path.return_value = "projects/x/subscriptions/y"
             with patch("streaming.consumer._do_pull", return_value=messages):
@@ -64,6 +64,7 @@ class TestConsumeBatch:
                             with patch("streaming.consumer.get_consumer_lag", return_value=0):
                                 with patch("streaming.consumer.log_execution") as mock_log:
                                     mock_run = MagicMock()
+                                    mock_run.run_id = run_id
                                     mock_log.return_value.__enter__ = lambda self: mock_run
                                     mock_log.return_value.__exit__ = lambda self, *a: None
 
@@ -110,14 +111,28 @@ class TestConsumeBatch:
         assert ack_ids == ["ack-good"]
         assert "ack-bad" not in ack_ids
 
-    def test_clears_partition_once_per_entity(self):
+    def test_never_clears_the_daily_partition(self):
+        """Regressão: a partição "data_ingestao=" é compartilhada por todos os
+        micro-batches do dia — limpá-la apagaria o que runs anteriores gravaram."""
         msgs = [
             _make_message("uf", {"ano": 2024, "sigla_uf": "SP"}, message_id=f"m{i}", ack_id=f"a{i}")
             for i in range(3)
         ]
-        mock_ack, mock_clear, mock_write, mock_run = self._run_with_messages(msgs)
+        _ack, mock_clear, _write, _run = self._run_with_messages(msgs)
 
-        mock_clear.assert_called_once()
+        mock_clear.assert_not_called()
+
+    def test_consecutive_runs_write_distinct_part_files(self):
+        """Regressão: dois runs no mesmo dia nomeiam o arquivo pelo run_id,
+        então o segundo não sobrescreve o Parquet do primeiro."""
+        msg = _make_message("uf", {"ano": 2024, "sigla_uf": "SP"})
+
+        _a1, _c1, write_1, _r1 = self._run_with_messages([msg], run_id="run-a")
+        _a2, _c2, write_2, _r2 = self._run_with_messages([msg], run_id="run-b")
+
+        assert write_1.call_args.kwargs["part_id"] == "run-a"
+        assert write_2.call_args.kwargs["part_id"] == "run-b"
+        assert write_1.call_args.args[1] == write_2.call_args.args[1]  # mesma partição do dia
 
     def test_sets_rows_read_and_written(self):
         msg = _make_message("uf", {"ano": 2024, "sigla_uf": "SP"})

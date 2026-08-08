@@ -104,7 +104,7 @@ def _write_ano_groups(
 
         table = to_pyarrow_table(grupo, schema)
         written = bronze_writer.write_partition(
-            entidade, chave, table, part_index=parte_por_ano[ano]
+            entidade, chave, table, part_id=str(parte_por_ano[ano])
         )
         parte_por_ano[ano] += 1
         rows_written += written

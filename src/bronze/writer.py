@@ -23,10 +23,15 @@ def build_partition_path(entidade: str, chave: str) -> str:
     return f"bronze/{entidade}/{chave}/"
 
 
-def write_partition(entidade: str, chave: str, table: pa.Table, part_index: int) -> int:
+def write_partition(entidade: str, chave: str, table: pa.Table, part_id: str) -> int:
     """Escreve um arquivo de lote na partição, sem apagar nada existente.
 
-    Serializa a tabela para Parquet e faz upload como part-{part_index}.parquet.
+    Serializa a tabela para Parquet e faz upload como part-{part_id}.parquet.
+    ``part_id`` nomeia o lote dentro da partição e é escolhido pelo caller: a
+    extração batch usa o índice sequencial do lote (a partição "ano=" é dela e
+    é reescrita inteira a cada execução); o consumer de streaming usa o run_id
+    da execução, porque a partição "data_ingestao=" é compartilhada entre
+    execuções e um índice sequencial colidiria com o lote de um run anterior.
     Retorna o número de linhas escritas. Limpeza da partição é responsabilidade
     exclusiva de clear_partition, chamada pelo caller antes do primeiro lote.
     """
@@ -40,7 +45,7 @@ def write_partition(entidade: str, chave: str, table: pa.Table, part_index: int)
     buffer.seek(0)
 
     # Upload
-    blob = bucket.blob(f"{prefix}part-{part_index}.parquet")
+    blob = bucket.blob(f"{prefix}part-{part_id}.parquet")
     _upload_blob(blob, buffer)
 
     return table.num_rows
