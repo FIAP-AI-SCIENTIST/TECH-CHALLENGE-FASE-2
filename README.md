@@ -62,11 +62,11 @@ flowchart LR
 
 **Cloud única (GCP), não multi-cloud.** A fonte de dados (Base dos Dados/INEP) mora nativamente no BigQuery — não existe equivalente na AWS/Azure. Mesmo com uma camada de abstração multi-cloud, a extração continuaria presa ao GCP; portabilizar o resto seria engenharia sem retorno. Tirar os dados do BigQuery público para processar em outra nuvem geraria custo real de egress, o que colide direto com o orçamento free-tier do projeto. Terraform também não abstrai providers de forma nativa — "agnóstico" significaria manter 2-3 implementações paralelas por módulo, triplicando a superfície de bugs para um requisito que o desafio não pede (pede escolha justificada, não portabilidade).
 
-**Pub/Sub em vez de Kafka.** O padrão publish/subscribe é o mesmo ensinado no curso (tópico → subscription/consumer group, semântica at-least-once, monitoramento de lag), mas Kafka self-hosted (ou mesmo um serviço gerenciado como Confluent Cloud/MSK) não tem free tier real, e o projeto já está comprometido com um único provedor gerenciado (GCP). Pub/Sub cobre o mesmo conceito curricular (publish/subscribe, consumer lag, entrega at-least-once) dentro do orçamento zero.
+**Pub/Sub em vez de Kafka.** O padrão publish/subscribe (tópico → subscription/consumer group, semântica at-least-once, monitoramento de lag) é o mesmo, mas Kafka self-hosted (ou mesmo um serviço gerenciado como Confluent Cloud/MSK) não tem free tier real, e o projeto já está comprometido com um único provedor gerenciado (GCP). Pub/Sub cobre publish/subscribe, consumer lag e entrega at-least-once dentro do orçamento zero.
 
-**Sem camada de staging antes da Bronze.** O curso ensina uma camada de staging (pouso bruto antes de qualquer contrato) antes da Bronze. Como a fonte já é uma tabela estruturada e confiável do BigQuery público (não um arquivo solto ou API instável), a extração aplica o contrato Pydantic direto na leitura e grava já na Bronze — o staging existiria só para reformatar algo que já chega formatado.
+**Sem camada de staging antes da Bronze.** Como a fonte já é uma tabela estruturada e confiável do BigQuery público (não um arquivo solto ou API instável), a extração aplica o contrato Pydantic direto na leitura e grava já na Bronze — uma camada de staging intermediária existiria só para reformatar algo que já chega formatado.
 
-**Parquet puro (overwrite por partição), sem open table format (Delta/Iceberg/Hudi).** Sem ACID multi-writer nem time travel — cada partição é reescrita por execução, sob controle explícito do writer (uma limpeza por `(entidade, ano)` no início do run, um arquivo por lote depois). Funciona para o volume e a cadência atuais; se a Silver (SCD Tipo 2) precisar de merge incremental mais sofisticado, um open table format entra como candidato natural nessa unit futura.
+**Parquet puro (sem open table format — Delta/Iceberg/Hudi).** Sem ACID multi-writer nem time travel, mas com controle explícito de overwrite por partição no writer: `clear_partition` limpa o prefixo da partição **uma única vez por `(entidade, ano)` no início do run**, nunca dentro do loop de lotes; cada lote grava seu próprio `part-{i}.parquet`, sem jamais sobrescrever o lote anterior — histórico completo preservado dentro do run. Funciona para o volume e a cadência atuais; se a Silver (SCD Tipo 2) precisar de merge incremental mais sofisticado, um open table format entra como candidato natural nessa unit futura.
 
 **NoSQL fora do MVP.** Pelo CAP Theorem e pela decisão de persistência poliglota, o projeto não introduz um banco NoSQL de serving no MVP — o BigQuery (Gold, unit futura) já cobre consulta analítica dimensional. Um caso de uso de IA aplicada (ex.: buscar municípios com perfil educacional similar via embeddings, servidos por um banco vetorial) fica registrado como extensão natural pós-MVP, não como lacuna do design atual.
 
@@ -181,4 +181,4 @@ Nenhum desses modelos está implementado neste MVP — dependem da Gold material
 
 ## Evidências de execução
 
-_(a preencher com prints/link de vídeo de cada camada rodando de verdade — ver seção de entrega)._
+WIP
