@@ -192,4 +192,4 @@ Nenhum desses modelos está implementado neste MVP — dependem da Gold material
 
 ## Evidências de execução
 
-_(a preencher com prints/link de vídeo de cada camada rodando de verdade — ver seção de entrega)._
+WIP
