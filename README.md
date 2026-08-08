@@ -12,7 +12,32 @@ Este projeto simula o trabalho de um time de engenharia de dados de uma organiza
 
 Arquitetura Lambda (camada batch + camada streaming convergindo na mesma camada Bronze), seguindo o padrão Medalhão (Bronze → Silver → Gold), 100% GCP.
 
-![Arquitetura do pipeline](docs/arquitetura.png)
+```mermaid
+flowchart LR
+    subgraph Fonte
+        BD[(BigQuery público\nbasedosdados)]
+    end
+
+    subgraph Batch
+        BD -->|extract_full / extract_incremental| Extraction[extraction]
+    end
+
+    subgraph Streaming
+        Scheduler[Cloud Scheduler\ncron] -->|HTTP + OIDC| CF[Cloud Function Gen2\nproducer]
+        CF -->|publish| Topic[(Pub/Sub\nalfabetizacao-streaming-events)]
+        Topic --> Consumer[consumer\npull + ack]
+    end
+
+    Extraction --> Bronze[(GCS — Bronze\nParquet particionado)]
+    Consumer --> Bronze
+
+    Bronze -.próxima unit.-> Silver[(Silver\nGCS/Parquet)]
+    Silver -.próxima unit.-> Gold[(Gold\nBigQuery, modelo dimensional)]
+
+    Extraction --> Audit[(BigQuery\naudit_log)]
+    Consumer --> Audit
+    Audit --> Alert[Alerta e-mail\nMonitoring]
+```
 
 - **Fonte**: BigQuery público (`basedosdados.br_inep_avaliacao_alfabetizacao`), sem exportação intermediária.
 - **Batch**: `extraction.extract_full`/`extract_incremental` lêem do BigQuery público e gravam Parquet particionado por entidade/ano na Bronze (GCS). Full na primeira execução, incremental nas seguintes; lotes acima de `BATCH_THRESHOLD` são escritos em múltiplos arquivos por partição (`part-{n}.parquet`), sem apagar lotes anteriores.
@@ -131,7 +156,6 @@ make streaming-consumer                          # consome o lote disponível e 
 Em produção, o Producer roda sozinho via Cloud Scheduler → Cloud Function (sem intervenção manual); o Consumer, por ora, roda sob demanda (`make streaming-consumer`) — um pull single-shot não tem o mesmo encaixe natural de agendamento que o Producer tem.
 
 **Por que só o caminho de streaming é agendado.** A extração batch (`make bronze`) roda sob demanda de propósito: a fonte é uma avaliação censitária anual do INEP e a extração incremental é particionada por ano (`extract_incremental` só busca `ano > max(ano já na Bronze)`). Agendar um job diário ou horário contra uma base que muda uma vez por ano gasta cota para não encontrar nada. O gatilho natural é a publicação de uma nova safra, que é um evento manual — quando isso deixar de valer (ou quando a Silver precisar de recomputação periódica), o caminho pronto é um Cloud Run Job com o mesmo Cloud Scheduler que já dispara o Producer.
-
 ## 4. Destruir a infraestrutura — sempre que terminar de testar
 
 ```bash
@@ -168,4 +192,4 @@ Nenhum desses modelos está implementado neste MVP — dependem da Gold material
 
 ## Evidências de execução
 
-WIP
+_(a preencher com prints/link de vídeo de cada camada rodando de verdade — ver seção de entrega)._
