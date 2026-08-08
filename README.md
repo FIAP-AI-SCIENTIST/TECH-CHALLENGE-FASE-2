@@ -12,38 +12,13 @@ Este projeto simula o trabalho de um time de engenharia de dados de uma organiza
 
 Arquitetura Lambda (camada batch + camada streaming convergindo na mesma camada Bronze), seguindo o padrão Medalhão (Bronze → Silver → Gold), 100% GCP.
 
-```mermaid
-flowchart LR
-    subgraph Fonte
-        BD[(BigQuery público\nbasedosdados)]
-    end
-
-    subgraph Batch
-        BD -->|extract_full / extract_incremental| Extraction[extraction]
-    end
-
-    subgraph Streaming
-        Scheduler[Cloud Scheduler\ncron] -->|HTTP + OIDC| CF[Cloud Function Gen2\nproducer]
-        CF -->|publish| Topic[(Pub/Sub\nalfabetizacao-streaming-events)]
-        Topic --> Consumer[consumer\npull + ack]
-    end
-
-    Extraction --> Bronze[(GCS — Bronze\nParquet particionado)]
-    Consumer --> Bronze
-
-    Bronze -.próxima unit.-> Silver[(Silver\nGCS/Parquet)]
-    Silver -.próxima unit.-> Gold[(Gold\nBigQuery, modelo dimensional)]
-
-    Extraction --> Audit[(BigQuery\naudit_log)]
-    Consumer --> Audit
-    Audit --> Alert[Alerta e-mail\nMonitoring]
-```
+![Arquitetura do pipeline](docs/arquitetura.png)
 
 - **Fonte**: BigQuery público (`basedosdados.br_inep_avaliacao_alfabetizacao`), sem exportação intermediária.
 - **Batch**: `extraction.extract_full`/`extract_incremental` lêem do BigQuery público e gravam Parquet particionado por entidade/ano na Bronze (GCS). Full na primeira execução, incremental nas seguintes; lotes acima de `BATCH_THRESHOLD` são escritos em múltiplos arquivos por partição (`part-{n}.parquet`), sem apagar lotes anteriores.
-- **Streaming**: `producer` gera eventos sintéticos (indicador/medição/meta) e publica no tópico Pub/Sub `alfabetizacao-streaming-events`, disparado por Cloud Scheduler via Cloud Function (Gen2). `consumer` faz pull da subscription, decodifica pelo contrato Pydantic correspondente e grava micro-batches na mesma Bronze.
+- **Streaming**: `producer` gera eventos sintéticos (indicador/medição/meta) e publica no tópico Pub/Sub `alfabetizacao-streaming-events`, disparado por Cloud Scheduler via Cloud Function (Gen2). `consumer` faz pull da subscription, decodifica pelo contrato Pydantic correspondente e grava micro-batches na mesma Bronze, particionados por data de ingestão (`data_ingestao=YYYY-MM-DD`). A escrita é append-only: cada execução do consumer grava um arquivo próprio (`part-{run_id}.parquet`) e nunca limpa a partição do dia, então micro-batches sucessivos se somam em vez de se substituírem.
 - **Contratos**: modelos Pydantic (`contracts/models.py`) validam e serializam para Arrow/Parquet, garantindo que Bronze batch e Bronze streaming escrevam sob o mesmo schema por entidade.
-- **Observabilidade**: cada execução (batch ou streaming) registra uma linha na tabela de auditoria BigQuery (`audit_log`) com linhas lidas/escritas, duração e status; logs estruturados em JSON; Consumer Lag do Pub/Sub monitorado via `num_undelivered_messages`; alerta por e-mail em erro.
+- **Observabilidade**: cada execução (batch ou streaming) registra uma linha na tabela de auditoria BigQuery (`alfabetizacao_analytics.pipeline_audit_log`) com `run_id`, linhas lidas/escritas, duração e status; logs estruturados em JSON; Consumer Lag do Pub/Sub monitorado via `num_undelivered_messages`; alerta por e-mail em erro. O `run_id` da auditoria é o mesmo que nomeia o arquivo Parquet do micro-batch de streaming, ligando cada arquivo da Bronze à sua linha de auditoria.
 - **Silver e Gold** são as próximas units do roadmap (modelagem dimensional Kimball, SCD Tipo 2, integração das bases) — ainda não implementadas; a Bronze já está pronta para alimentá-las.
 
 ## Stack e por que essas escolhas
@@ -66,7 +41,12 @@ flowchart LR
 
 **Sem camada de staging antes da Bronze.** Como a fonte já é uma tabela estruturada e confiável do BigQuery público (não um arquivo solto ou API instável), a extração aplica o contrato Pydantic direto na leitura e grava já na Bronze — uma camada de staging intermediária existiria só para reformatar algo que já chega formatado.
 
-**Parquet puro (sem open table format — Delta/Iceberg/Hudi).** Sem ACID multi-writer nem time travel, mas com controle explícito de overwrite por partição no writer: `clear_partition` limpa o prefixo da partição **uma única vez por `(entidade, ano)` no início do run**, nunca dentro do loop de lotes; cada lote grava seu próprio `part-{i}.parquet`, sem jamais sobrescrever o lote anterior — histórico completo preservado dentro do run. Funciona para o volume e a cadência atuais; se a Silver (SCD Tipo 2) precisar de merge incremental mais sofisticado, um open table format entra como candidato natural nessa unit futura.
+**Parquet puro (sem open table format — Delta/Iceberg/Hudi).** Sem ACID multi-writer nem time travel; no lugar disso, cada caminho de escrita tem uma regra explícita de posse da partição:
+
+- **Batch** é dono da partição `ano=`: `clear_partition` limpa o prefixo **uma única vez por `(entidade, ano)` no início do run**, nunca dentro do loop de lotes, e cada lote grava seu próprio `part-{i}.parquet`. Reextrair um ano substitui aquele ano inteiro, de forma determinística.
+- **Streaming** não é dono da partição `data_ingestao=`: ela é compartilhada por todos os micro-batches do dia, então o consumer **nunca** limpa nada e nomeia o arquivo pelo `run_id` da execução (`part-{run_id}.parquet`), o que torna a colisão com um run anterior impossível.
+
+Isso preserva o histórico da Bronze sem depender de transações, ao custo de não ter merge/upsert. Se a Silver (SCD Tipo 2) precisar de merge incremental mais sofisticado, um open table format entra como candidato natural nessa unit futura.
 
 **NoSQL fora do MVP.** Pelo CAP Theorem e pela decisão de persistência poliglota, o projeto não introduz um banco NoSQL de serving no MVP — o BigQuery (Gold, unit futura) já cobre consulta analítica dimensional. Um caso de uso de IA aplicada (ex.: buscar municípios com perfil educacional similar via embeddings, servidos por um banco vetorial) fica registrado como extensão natural pós-MVP, não como lacuna do design atual.
 
@@ -74,9 +54,9 @@ flowchart LR
 
 - **Orçamento**: `google_billing_budget` monitorando a conta de faturamento, alerta em 50%/90%/100% de R$ 1,00 — o GCP não aceita um valor de budget zero, então R$ 1,00 é o menor teto configurável para sinalizar qualquer gasto que fuja do free tier, não um limite de consumo esperado.
 - **Free tier estrito**: nenhum serviço sem free tier generoso entra no design (sem Dataflow, Composer ou Dataproc); GCS, BigQuery (1TB de query/mês), Pub/Sub (10GB/mês) e Cloud Functions (2M invocações/mês) cobrem o volume do projeto.
-- **Infraestrutura efêmera**: todo o Terraform é desenhado para subir e cair sem sujeira — bucket com `force_destroy`, dataset com `delete_contents_on_destroy = true`, tabela de auditoria sem `deletion_protection`. Suba só para testar/demonstrar, rode `make infra-destroy` depois.
+- **Infraestrutura efêmera**: todo o Terraform é desenhado para subir e cair sem sujeira — bucket com `force_destroy`, dataset com `delete_contents_on_destroy = true`, tabela de auditoria sem `deletion_protection`. Suba só para testar/demonstrar, rode `make infra-destroy` depois. A única exceção é o bucket de state (`<project>-tfstate`), criado fora do Terraform pelo `bootstrap.sh` justamente por ser pré-requisito dele — some com ele à mão quando encerrar o projeto de vez.
 - **Egress**: co-localizar o processamento na mesma nuvem da fonte (BigQuery público) evita custo de transferência entre nuvens — ver trade-off de cloud única acima.
-- **Least privilege como controle de custo indireto**: a service account central (`alfabetizacao-pipeline-sa`) só tem os papéis mínimos por recurso (Storage Object Admin no bucket específico, BigQuery Data Editor no dataset específico, Pub/Sub Publisher/Subscriber no tópico/subscription específicos) — reduz a superfície de uso indevido de cota.
+- **Least privilege como controle de custo indireto**: a service account central (`alfabetizacao-pipeline-sa`) recebe papéis com escopo de recurso sempre que o GCP oferece um (Storage Object Admin no bucket específico, BigQuery Data Editor no dataset específico, Pub/Sub Publisher/Subscriber no tópico/subscription específicos). Dois papéis não têm equivalente com escopo de recurso no IAM do GCP e ficam necessariamente no nível do projeto: `roles/bigquery.jobUser` (rodar query/insert é uma operação de projeto, não de dataset) e `roles/monitoring.viewer` (ler a métrica de Consumer Lag). Nada além disso — reduz a superfície de uso indevido de cota.
 
 ## Estrutura do repositório
 
@@ -90,6 +70,7 @@ src/
 └── observability/     # Logging estruturado, auditoria BigQuery e monitoramento (Consumer Lag)
 infra/                 # Terraform: toda a infra GCP (efêmera — sobe e destrói por demanda)
 tests/                 # Testes espelhando src/, incluindo Property-Based Testing (Hypothesis)
+docs/                  # Diagrama de arquitetura (fonte Excalidraw + PNG)
 ```
 
 ## Pré-requisitos
@@ -124,10 +105,14 @@ source .env
 
 ## 2. Subir a infraestrutura
 
+O Terraform guarda o state num bucket GCS (state locking, porque mais de uma pessoa aplica no mesmo projeto). Esse bucket é pré-requisito do próprio `terraform init`, então não dá para o Terraform criá-lo — `bootstrap.sh` resolve o ovo-e-galinha criando o bucket e habilitando as duas APIs (Resource Manager e IAM) sem as quais o `refresh` trava antes de conseguir habilitar as demais.
+
 ```bash
+bash infra/bootstrap.sh $TF_VAR_project_id $TF_VAR_gcs_location   # só uma vez por projeto GCP
+
 make infra-init PROJECT_ID=$TF_VAR_project_id   # só na primeira vez (ou se infra/.terraform sumir)
-make infra-plan                                  # empacota o Producer e mostra o que será criado
-make infra-apply                                 # cria dataset BigQuery, bucket GCS, Pub/Sub, SA, budget, monitoring, Cloud Function + Scheduler
+make infra-plan                                 # empacota o Producer e mostra o que será criado
+make infra-apply                                # cria dataset BigQuery, bucket GCS, Pub/Sub, SA, budget, monitoring, Cloud Function + Scheduler
 ```
 
 `infra-apply` só roda a partir da branch `main`, com a working tree limpa e sincronizada com `origin/main` (`infra/apply-guard.sh` bloqueia isso de propósito, para evitar duas pessoas aplicando mudanças conflitantes em paralelo no mesmo projeto GCP compartilhado).
@@ -145,13 +130,15 @@ make streaming-consumer                          # consome o lote disponível e 
 
 Em produção, o Producer roda sozinho via Cloud Scheduler → Cloud Function (sem intervenção manual); o Consumer, por ora, roda sob demanda (`make streaming-consumer`) — um pull single-shot não tem o mesmo encaixe natural de agendamento que o Producer tem.
 
+**Por que só o caminho de streaming é agendado.** A extração batch (`make bronze`) roda sob demanda de propósito: a fonte é uma avaliação censitária anual do INEP e a extração incremental é particionada por ano (`extract_incremental` só busca `ano > max(ano já na Bronze)`). Agendar um job diário ou horário contra uma base que muda uma vez por ano gasta cota para não encontrar nada. O gatilho natural é a publicação de uma nova safra, que é um evento manual — quando isso deixar de valer (ou quando a Silver precisar de recomputação periódica), o caminho pronto é um Cloud Run Job com o mesmo Cloud Scheduler que já dispara o Producer.
+
 ## 4. Destruir a infraestrutura — sempre que terminar de testar
 
 ```bash
 make infra-destroy
 ```
 
-Todos os recursos foram desenhados para serem efêmeros de propósito — o `destroy` funciona limpo, sem sujeira. Não deixe a infra provisionada depois do seu teste; o orçamento de R$ 1,00 é só um alerta, não um limite automático que corta o projeto.
+Todos os recursos gerenciados pelo Terraform foram desenhados para serem efêmeros de propósito — o `destroy` funciona limpo, sem sujeira. O bucket de state (`<project>-tfstate`) fica de fora, porque é ele que guarda o próprio state; remova à mão (`gcloud storage rm -r gs://$TF_VAR_project_id-tfstate`) só quando encerrar o projeto de vez. Não deixe a infra provisionada depois do seu teste; o orçamento de R$ 1,00 é só um alerta, não um limite automático que corta o projeto.
 
 ## Qualidade e testes
 
