@@ -8,6 +8,7 @@ from google.cloud import bigquery
 
 from bronze import reader as bronze_reader
 from bronze import writer as bronze_writer
+from common.lock import gcs_lock
 from common.retry import with_retry
 from contracts.models import (
     DadosAlunosRecord,
@@ -112,28 +113,36 @@ def _write_ano_groups(
 
 
 def _run_extraction(entidade: str, sql: str) -> None:
-    """Núcleo compartilhado por extract_full/extract_incremental: query -> valida -> escreve -> audita."""
+    """Núcleo compartilhado por extract_full/extract_incremental: query -> valida -> escreve -> audita.
+
+    Protegido por um lock exclusivo (`common.lock.gcs_lock`) — duas execuções
+    concorrentes da mesma entidade (ex: dois membros do grupo rodando
+    `make bronze` ao mesmo tempo) poderiam intercalar `clear_partition`/
+    `write_partition` e deixar a partição com uma mistura inconsistente de
+    arquivos de dois runs diferentes.
+    """
     _tabela, modelo = ENTITY_TABLE_MAP[entidade]
 
-    with log_execution(unit="Bronze_Ingestion", layer="Bronze") as run:
-        client = bigquery.Client(project=PROJECT_ID)
-        rows = _do_query(client, sql)
-        row_batches = _split_into_batches(rows, getattr(rows, "total_rows", None))
+    with gcs_lock(bronze_writer.BUCKET_NAME, f"bronze/.locks/{entidade}.lock"):
+        with log_execution(unit="Bronze_Ingestion", layer="Bronze") as run:
+            client = bigquery.Client(project=PROJECT_ID)
+            rows = _do_query(client, sql)
+            row_batches = _split_into_batches(rows, getattr(rows, "total_rows", None))
 
-        rows_read = 0
-        rows_written = 0
-        anos_limpos: set[int] = set()
-        parte_por_ano: dict[int, int] = defaultdict(int)
-        for row_batch in row_batches:
-            instancias = _instantiate_records(row_batch, modelo)
-            rows_read += len(instancias)
-            ano_groups = _group_by_ano(instancias)
-            rows_written += _write_ano_groups(
-                entidade, ano_groups, modelo, anos_limpos, parte_por_ano
-            )
+            rows_read = 0
+            rows_written = 0
+            anos_limpos: set[int] = set()
+            parte_por_ano: dict[int, int] = defaultdict(int)
+            for row_batch in row_batches:
+                instancias = _instantiate_records(row_batch, modelo)
+                rows_read += len(instancias)
+                ano_groups = _group_by_ano(instancias)
+                rows_written += _write_ano_groups(
+                    entidade, ano_groups, modelo, anos_limpos, parte_por_ano
+                )
 
-        run.rows_read = rows_read
-        run.rows_written = rows_written
+            run.rows_read = rows_read
+            run.rows_written = rows_written
 
 
 def extract_full(entidade: str) -> None:
