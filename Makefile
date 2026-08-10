@@ -1,4 +1,4 @@
-.PHONY: install test test-contracts test-extraction test-streaming bronze streaming-producer streaming-consumer clean package-producer infra-init infra-plan infra-apply infra-destroy
+.PHONY: install test test-contracts test-extraction test-streaming test-silver bronze silver streaming-producer streaming-consumer clean package-producer infra-init infra-plan infra-apply infra-destroy
 
 # O projeto reside num CIFS/SMB share que não suporta symlinks.
 # O venv fica em $HOME/.venvs para evitar o problema.
@@ -24,6 +24,9 @@ test-extraction: install
 test-streaming: install
 	$(PYTEST) tests/streaming/ -v
 
+test-silver: install
+	$(PYTEST) tests/silver/ tests/common/test_lock.py -v
+
 # --- Bronze Ingestion ---
 
 bronze: install
@@ -32,6 +35,11 @@ bronze: install
 		$(PYTHON) -c "from extraction.extraction import extract_entity; extract_entity('$$entity')"; \
 		echo "Entity $$entity done."; \
 	done
+
+# --- Silver (limpeza, normalização, dedup, SCD2) ---
+
+silver: install
+	$(PYTHON) -c "from silver.pipeline import run_all_silver; run_all_silver()"
 
 # --- Streaming (Producer + Consumer) ---
 
