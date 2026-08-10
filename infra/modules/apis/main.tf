@@ -70,3 +70,12 @@ resource "google_project_service" "iam" {
   disable_on_destroy = false
   depends_on         = [google_project_service.cloudresourcemanager]
 }
+
+# Habilita a API do Cloud Billing (necessária para conceder papéis IAM na
+# billing account, ex: roles/billing.costsManager pros membros "roles/editor")
+resource "google_project_service" "cloudbilling" {
+  project            = var.project_id
+  service            = "cloudbilling.googleapis.com"
+  disable_on_destroy = false
+  depends_on         = [google_project_service.cloudresourcemanager]
+}

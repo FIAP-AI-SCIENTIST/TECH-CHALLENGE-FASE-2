@@ -24,7 +24,7 @@ provider "google" {
   # sem depender de cada membro do grupo rodar `gcloud auth application-default set-quota-project`
   # na própria máquina. Aqui fixamos explicitamente qual projeto "paga a cota" de toda chamada de API.
   user_project_override = true
-  billing_project        = var.project_id
+  billing_project       = var.project_id
 }
 
 # 1. Habilitar APIs (Storage, BigQuery, PubSub, etc.)
@@ -83,10 +83,12 @@ module "pubsub" {
 module "iam" {
   source            = "./modules/iam"
   project_id        = var.project_id
+  billing_account   = var.billing_account
   bucket_name       = module.storage.bucket_name
   dataset_id        = module.bigquery.dataset_id
   topic_name        = module.pubsub.topic_name
   subscription_name = module.pubsub.subscription_name
+  team_members      = var.team_members
 
   depends_on = [module.apis]
 }

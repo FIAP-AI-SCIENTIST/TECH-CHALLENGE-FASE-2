@@ -54,3 +54,39 @@ resource "google_project_iam_member" "monitoring_viewer_access" {
   role    = "roles/monitoring.viewer"
   member  = "serviceAccount:${google_service_account.pipeline_sa.email}"
 }
+
+# Acesso humano ao console (não confundir com os papéis da SA acima).
+# Cada membro usa a PRÓPRIA conta Google (nunca compartilhar credenciais).
+# for_each sobre var.team_members: uma entrada por (email, papel) evita
+# recriar todo mundo quando só uma pessoa/papel muda.
+resource "google_project_iam_member" "team_access" {
+  for_each = var.team_members
+
+  project = var.project_id
+  role    = each.value
+  member  = "user:${each.key}"
+}
+
+# "roles/editor" puro NÃO sobe/destrói esta stack: não inclui setIamPolicy
+# (não gerencia os google_project_iam_member acima nem os do SA) nem permissão
+# de billing (o orçamento do módulo budget é escopo de billing account, não de
+# projeto). Quem precisa rodar apply/destroy completo ganha os dois extras.
+locals {
+  editor_emails = toset([for email, role in var.team_members : email if role == "roles/editor"])
+}
+
+resource "google_project_iam_member" "team_access_iam_admin" {
+  for_each = local.editor_emails
+
+  project = var.project_id
+  role    = "roles/resourcemanager.projectIamAdmin"
+  member  = "user:${each.value}"
+}
+
+resource "google_billing_account_iam_member" "team_access_billing" {
+  for_each = local.editor_emails
+
+  billing_account_id = var.billing_account
+  role                = "roles/billing.costsManager"
+  member              = "user:${each.value}"
+}
