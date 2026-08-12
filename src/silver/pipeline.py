@@ -8,6 +8,7 @@ from bronze import reader as bronze_reader
 from bronze import writer as bronze_writer
 from common.lock import gcs_lock
 from observability.logging import log_execution, setup_logger
+from quality.pipeline import run_quality_checks
 from silver import reference
 from silver import writer as silver_writer
 from silver.transform import (
@@ -73,6 +74,7 @@ def run_silver(entidade: str) -> None:
                 )
 
             dedupada = dedupe(entidade, limpa)
+            run_quality_checks(entidade, dedupada)
             grupos_por_ano = group_by_ano(dedupada)
 
             rows_written = 0

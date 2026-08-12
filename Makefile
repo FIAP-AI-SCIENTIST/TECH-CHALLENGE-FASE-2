@@ -1,4 +1,4 @@
-.PHONY: install test test-contracts test-extraction test-streaming test-silver bronze silver streaming-producer streaming-consumer clean package-producer infra-init infra-plan infra-apply infra-destroy
+.PHONY: install test test-contracts test-extraction test-streaming test-silver test-gold test-quality bronze silver gold quality streaming-producer streaming-consumer clean package-producer infra-init infra-plan infra-apply infra-destroy
 
 # O projeto reside num CIFS/SMB share que não suporta symlinks.
 # O venv fica em $HOME/.venvs para evitar o problema.
@@ -27,6 +27,12 @@ test-streaming: install
 test-silver: install
 	$(PYTEST) tests/silver/ tests/common/test_lock.py -v
 
+test-gold: install
+	$(PYTEST) tests/gold/ -v
+
+test-quality: install
+	$(PYTEST) tests/quality/ -v
+
 # --- Bronze Ingestion ---
 
 bronze: install
@@ -40,6 +46,16 @@ bronze: install
 
 silver: install
 	$(PYTHON) -c "from silver.pipeline import run_all_silver; run_all_silver()"
+
+# --- Gold (modelo dimensional materializado no BigQuery) ---
+
+gold: install
+	$(PYTHON) -c "from gold.pipeline import run_gold; run_gold()"
+
+# --- Data Quality (checks ad hoc contra o estado atual da Silver) ---
+
+quality: install
+	$(PYTHON) -c "from quality.pipeline import run_all_quality_checks; run_all_quality_checks()"
 
 # --- Streaming (Producer + Consumer) ---
 
