@@ -10,8 +10,6 @@ dependencies = [
     "google-cloud-storage",
     "google-cloud-monitoring",
     "google-cloud-pubsub",
-    "duckdb",
-    "numpy",
 ]
 
 [project.optional-dependencies]
