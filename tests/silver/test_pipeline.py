@@ -56,44 +56,27 @@ class TestRunSilverRegularEntity:
 class TestRunSilverScd2Entity:
     """Fluxo completo mockado — entidade SCD2."""
 
-    def test_applies_scd2_chronologically_and_writes_once(self):
-        bruta = pa.table({
-            "ano": [2023, 2024],
-            "sigla_uf": ["SP", "SP"],
-            "rede": ["0", "0"],
-            "meta_alfabetizacao_2024": [50.0, 99.0],
-            "meta_alfabetizacao_2025": [55.0, 55.0],
-            "meta_alfabetizacao_2026": [60.0, 60.0],
-            "meta_alfabetizacao_2027": [65.0, 65.0],
-            "meta_alfabetizacao_2028": [70.0, 70.0],
-            "meta_alfabetizacao_2029": [80.0, 80.0],
-            "meta_alfabetizacao_2030": [100.0, 100.0],
-            "percentual_participacao": [90.0, 90.0],
-        })
+    _BRUTA = pa.table({
+        "ano": [2023, 2024],
+        "sigla_uf": ["SP", "SP"],
+        "rede": ["0", "0"],
+        "meta_alfabetizacao_2024": [50.0, 99.0],
+        "meta_alfabetizacao_2025": [55.0, 55.0],
+        "meta_alfabetizacao_2026": [60.0, 60.0],
+        "meta_alfabetizacao_2027": [65.0, 65.0],
+        "meta_alfabetizacao_2028": [70.0, 70.0],
+        "meta_alfabetizacao_2029": [80.0, 80.0],
+        "meta_alfabetizacao_2030": [100.0, 100.0],
+        "percentual_participacao": [90.0, 90.0],
+    })
 
+    def test_applies_scd2_chronologically(self):
         mock_log, mock_run = _mock_log_execution()
-        empty_dim = pa.Table.from_pylist([], schema=pa.schema([
-            pa.field("sigla_uf", pa.string()),
-            pa.field("rede", pa.string()),
-            pa.field("meta_alfabetizacao_2024", pa.float64()),
-            pa.field("meta_alfabetizacao_2025", pa.float64()),
-            pa.field("meta_alfabetizacao_2026", pa.float64()),
-            pa.field("meta_alfabetizacao_2027", pa.float64()),
-            pa.field("meta_alfabetizacao_2028", pa.float64()),
-            pa.field("meta_alfabetizacao_2029", pa.float64()),
-            pa.field("meta_alfabetizacao_2030", pa.float64()),
-            pa.field("percentual_participacao", pa.float64()),
-            pa.field("valid_from", pa.int64()),
-            pa.field("valid_to", pa.int64()),
-            pa.field("is_current", pa.bool_()),
-        ]))
-
         with patch("silver.pipeline.gcs_lock", new=_mock_lock()), \
              patch("silver.pipeline.log_execution", mock_log), \
-             patch("silver.pipeline.bronze_reader.read_partition", return_value=bruta), \
+             patch("silver.pipeline.bronze_reader.read_partition", return_value=self._BRUTA), \
              patch("silver.pipeline.reference.get_dicionario", return_value={}), \
              patch("silver.pipeline.reference.get_diretorio_uf", return_value={}), \
-             patch("silver.pipeline.silver_reader.read_scd2_table", return_value=empty_dim), \
              patch("silver.pipeline.silver_writer.write_scd2_table") as mock_write:
             run_silver("meta_alfabetizacao_uf")
 
@@ -104,6 +87,46 @@ class TestRunSilverScd2Entity:
         currents = [r for r in tabela_final.to_pylist() if r["is_current"]]
         assert len(currents) == 1
         assert currents[0]["meta_alfabetizacao_2024"] == 99.0
+
+    def test_persisted_scd2_state_does_not_leak_into_the_output(self):
+        """Regra 11: a tabela SCD2 é reconstruída do Bronze a cada execução.
+        Um estado persistido divergente (resíduo de um run anterior) não pode
+        influenciar a saída — era exatamente por aí que a cadeia de versões
+        duplicava a cada `make silver`, com versões fechadas antes de abrir.
+
+        O patch é em `silver.reader`, não em `silver.pipeline`: o pipeline não
+        importa mais o reader, então o resíduo simplesmente não tem por onde
+        entrar. Se alguém reintroduzir a leitura de estado, este teste quebra.
+        """
+        residuo = pa.Table.from_pylist([{
+            "sigla_uf": "SP",
+            "rede": "0",
+            "meta_alfabetizacao_2024": 1.0,
+            "meta_alfabetizacao_2025": 1.0,
+            "meta_alfabetizacao_2026": 1.0,
+            "meta_alfabetizacao_2027": 1.0,
+            "meta_alfabetizacao_2028": 1.0,
+            "meta_alfabetizacao_2029": 1.0,
+            "meta_alfabetizacao_2030": 1.0,
+            "percentual_participacao": 1.0,
+            "valid_from": 1999,
+            "valid_to": None,
+            "is_current": True,
+        }])
+
+        mock_log, mock_run = _mock_log_execution()
+        with patch("silver.pipeline.gcs_lock", new=_mock_lock()), \
+             patch("silver.pipeline.log_execution", mock_log), \
+             patch("silver.pipeline.bronze_reader.read_partition", return_value=self._BRUTA), \
+             patch("silver.pipeline.reference.get_dicionario", return_value={}), \
+             patch("silver.pipeline.reference.get_diretorio_uf", return_value={}), \
+             patch("silver.reader.read_scd2_table", return_value=residuo), \
+             patch("silver.pipeline.silver_writer.write_scd2_table") as mock_write:
+            run_silver("meta_alfabetizacao_uf")
+
+        tabela_final = mock_write.call_args.args[1]
+        assert tabela_final.num_rows == 2
+        assert 1999 not in {r["valid_from"] for r in tabela_final.to_pylist()}
 
 
 class TestRunAllSilver:

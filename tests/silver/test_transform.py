@@ -243,3 +243,37 @@ class TestApplyScd2:
         assert siglas == {"SP", "RJ"}
         sp_row = next(r for r in segunda.to_pylist() if r["sigla_uf"] == "SP")
         assert sp_row["is_current"] is True  # nao foi tocada
+
+    def _replay_dos_anos(self):
+        """Reproduz o loop de `silver.pipeline.run_silver`: parte de dimensão
+        vazia (regra 11) e aplica os anos do Bronze em ordem cronológica.
+        """
+        dimensao = pa.Table.from_pylist([], schema=self._SCHEMA)
+        for ano, meta in ((2023, 50.0), (2024, 99.0)):
+            dimensao = apply_scd2(
+                "meta_alfabetizacao_uf", dimensao, self._make_incoming(meta_2024=meta), ano=ano
+            )
+        return dimensao
+
+    def test_replay_from_empty_is_deterministic(self):
+        """Regra 11: a tabela SCD2 é função determinística do Bronze. Dois
+        replays do mesmo Bronze produzem a mesma tabela — é o que permite
+        reconstruir a cadeia a cada execução em vez de acumular versões.
+        """
+        primeiro = self._replay_dos_anos()
+        segundo = self._replay_dos_anos()
+
+        assert segundo.to_pylist() == primeiro.to_pylist()
+
+    def test_no_version_closes_before_it_opens(self):
+        """Invariante estrutural do SCD2: `valid_to` nunca pode ser anterior a
+        `valid_from` — uma versão fechada antes de abrir não é histórico, é
+        corrupção. Era o que a leitura do estado persistido produzia
+        (`valid_from=2024, valid_to=2023`) ao comparar o ano mais antigo do
+        replay contra a versão vigente deixada pelo run anterior.
+        """
+        dimensao = self._replay_dos_anos()
+
+        for row in dimensao.to_pylist():
+            if row["valid_to"] is not None:
+                assert row["valid_to"] >= row["valid_from"], row

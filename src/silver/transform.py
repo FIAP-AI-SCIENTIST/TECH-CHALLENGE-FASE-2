@@ -237,11 +237,14 @@ def apply_scd2(entidade: str, dimension_atual: pa.Table, incoming: pa.Table, ano
     """Aplica SCD Tipo 2 — abre nova versão só quando os valores rastreados
     (`SCD2_TRACKED_COLUMNS`) mudam em relação à última versão vigente da
     mesma chave natural (business-rules.md regra 10). `ano` é o ano de
-    referência desta execução, usado como `valid_from`/`valid_to`.
+    referência desta chamada, usado como `valid_from`/`valid_to`.
 
-    Único ponto desta unit que não é stateless — precisa do estado atual da
-    tabela SCD2 (regra 11), lido por `silver.reader.read_scd2_table` antes
-    da chamada.
+    `dimension_atual` é a cadeia de versões acumulada pelos anos anteriores
+    **desta mesma execução**, nunca o estado persistido no GCS (regra 11):
+    `silver.pipeline.run_silver` parte de tabela vazia e replaya os anos do
+    Bronze em ordem cronológica, o que faz da tabela SCD2 uma função
+    determinística do Bronze — duas execuções sobre o mesmo Bronze produzem
+    a mesma saída, e nenhuma versão é fechada antes de abrir.
     """
     chave_cols = SCD2_NATURAL_KEYS[entidade]
     schema_final = _with_scd2_columns(incoming.schema)
