@@ -1,5 +1,10 @@
-"""Leitura de estado da camada Silver — hoje só a tabela SCD2 (estado atual
-lido antes de `apply_scd2`, o único ponto desta unit que não é stateless).
+"""Leitura de estado da camada Silver por consumidores a jusante — hoje só a
+tabela SCD2 das entidades de meta.
+
+Não é usada por `silver.pipeline`: desde a regra 11 do `business-rules.md` a
+cadeia de versões é reconstruída do Bronze a cada execução, então a Silver não
+lê o próprio estado para decidir nada. Quem consome daqui é a Gold (U7, modelo
+dimensional) e a Data Quality (U8, `make quality` sobre o estado atual).
 """
 
 import io
@@ -15,11 +20,12 @@ from silver.writer import scd2_path
 
 
 def read_scd2_table(entidade: str, schema: pa.Schema) -> pa.Table:
-    """Lê o estado atual da tabela SCD2 de uma entidade.
+    """Lê a tabela SCD2 gravada de uma entidade de meta.
 
     Retorna uma tabela vazia (já com o `schema` esperado — incluindo
-    `valid_from`/`valid_to`/`is_current`) se ainda não houver nenhum estado
-    gravado (primeira execução da entidade).
+    `valid_from`/`valid_to`/`is_current`) se ainda não houver nada gravado,
+    para que o caller não precise distinguir "entidade nunca processada" de
+    "entidade sem versões".
     """
     client = storage.Client()
     bucket = client.bucket(BUCKET_NAME)
