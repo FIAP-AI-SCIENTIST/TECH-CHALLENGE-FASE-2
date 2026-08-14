@@ -14,35 +14,38 @@ from common.retry import with_retry
 BUCKET_NAME = "useful-space-277919-datalake"
 TIMEOUT_SECONDS = 10
 
-def parse_partition_path(path: str) -> tuple[str, int]:
+
+def parse_partition_path(path: str) -> tuple[str, str]:
     """Operação inversa de build_partition_path.
 
-    Dado 'bronze/uf/ano=2023/' ou 'bronze/uf/ano=2023/part-0.parquet',
-    retorna ('uf', 2023).
+    Dado 'bronze/uf/ano=2023/' ou 'bronze/alunos/data_ingestao=2026-08-06/part-0.parquet',
+    retorna ('uf', 'ano=2023') / ('alunos', 'data_ingestao=2026-08-06').
+
+    Genérica: não sabe o significado da chave, só extrai o segmento bruto.
     """
-    # Remove trailing slash se existir
     clean_path = path.rstrip("/")
-    # Extrai entidade e ano via regex
-    match = re.search(r"bronze/([^/]+)/ano=(\d+)", clean_path)
+    match = re.search(r"bronze/([^/]+)/([^/]+)", clean_path)
     if not match:
         raise ValueError(f"Caminho de partição inválido: {path}")
-    return match.group(1), int(match.group(2))
+    return match.group(1), match.group(2)
 
 
 def list_bronze_years(entidade: str) -> set[int]:
-    """Lista os anos já gravados no Bronze para uma entidade.
+    """Lista os anos já gravados no Bronze para uma entidade (partições "ano=").
 
-    Retorna set() vazio se não houver nada (nunca levanta exceção
-    por ausência — bucket vazio é um estado válido).
+    Ignora silenciosamente outras chaves de partição da mesma entidade
+    (ex: "data_ingestao=..." do streaming) — não são anos, não devem
+    quebrar o parsing. Retorna set() vazio se não houver nada.
     """
     years: set[int] = set()
     try:
         client = storage.Client()
-        bucket = client.bucket(BUCKET_NAME)
         blobs = _list_blobs_for_entity(client, BUCKET_NAME, entidade)
         for blob in blobs:
-            _, ano = parse_partition_path(blob.name)
-            years.add(ano)
+            _, chave = parse_partition_path(blob.name)
+            match = re.fullmatch(r"ano=(\d+)", chave)
+            if match:
+                years.add(int(match.group(1)))
     except NotFound:
         pass  # Bucket não existe — retorna set vazio
     return years
@@ -56,25 +59,24 @@ def _list_blobs_for_entity(client: storage.Client, bucket_name: str, entidade: s
     return list(bucket.list_blobs(prefix=prefix, timeout=TIMEOUT_SECONDS))
 
 
-def read_partition(entidade: str, ano: int | None = None) -> pa.Table:
+def read_partition(entidade: str, chave: str | None = None) -> pa.Table:
     """Lê partições Parquet do GCS.
 
-    Se ``ano`` for informado, lê só os Parquets daquela partição.
-    Senão, lê e concatena todas as partições da entidade.
+    Se ``chave`` for informada (ex: "ano=2023"), lê só os Parquets daquela
+    partição. Senão, lê e concatena todas as partições da entidade.
     """
     client = storage.Client()
-    bucket = client.bucket(BUCKET_NAME)
 
-    if ano is not None:
-        prefix = f"bronze/{entidade}/ano={ano}/"
+    if chave is not None:
+        prefix = f"bronze/{entidade}/{chave}/"
     else:
         prefix = f"bronze/{entidade}/"
 
-    tables = []
     blobs = _list_blobs_for_entity(client, BUCKET_NAME, entidade)
-    if ano is not None:
+    if chave is not None:
         blobs = [b for b in blobs if b.name.startswith(prefix)]
 
+    tables = []
     for blob in blobs:
         if not blob.name.endswith(".parquet"):
             continue

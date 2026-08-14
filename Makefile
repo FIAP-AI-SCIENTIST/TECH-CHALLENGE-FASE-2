@@ -1,4 +1,4 @@
-.PHONY: install test test-u1 test-u4 bronze clean infra-plan infra-apply infra-destroy
+.PHONY: install test test-contracts test-extraction test-streaming bronze streaming-producer streaming-consumer clean package-producer infra-init infra-plan infra-apply infra-destroy
 
 # O projeto reside num CIFS/SMB share que não suporta symlinks.
 # O venv fica em $HOME/.venvs para evitar o problema.
@@ -15,11 +15,14 @@ install:
 test: install
 	$(PYTEST) tests/
 
-test-u1: install
+test-contracts: install
 	$(PYTEST) tests/contracts/ -v
 
 test-extraction: install
 	$(PYTEST) tests/extraction/ tests/bronze/ -v
+
+test-streaming: install
+	$(PYTEST) tests/streaming/ -v
 
 # --- Bronze Ingestion ---
 
@@ -29,6 +32,20 @@ bronze: install
 		$(PYTHON) -c "from extraction.extraction import extract_entity; extract_entity('$$entity')"; \
 		echo "Entity $$entity done."; \
 	done
+
+# --- Streaming (Producer + Consumer) ---
+
+# Uso: make streaming-producer TIPO=meta N=5
+streaming-producer: install
+	$(PYTHON) -c "from streaming.producer import produce_events; produce_events('$(or $(TIPO),indicador)', n=$(or $(N),1))"
+
+streaming-consumer: install
+	$(PYTHON) -c "from streaming.consumer import consume_batch; consume_batch()"
+
+# Empacota o código do Producer como zip para deploy no Cloud Function (Gen2).
+# Precisa rodar antes de infra-plan/infra-apply quando o código do Producer mudar.
+package-producer:
+	bash infra/scripts/package_producer.sh
 
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
@@ -46,11 +63,11 @@ infra-init:
 	@if [ -z "$(PROJECT_ID)" ]; then echo "Erro: Forneça o PROJECT_ID (ex: make infra-init PROJECT_ID=seu-projeto, ou rode 'source .env' antes)"; exit 1; fi
 	cd infra && terraform init -backend-config="bucket=$(PROJECT_ID)-tfstate"
 
-infra-plan:
+infra-plan: package-producer
 	cd infra && terraform plan
 
 # Protegido pelo apply-guard.sh para evitar drift em grupo
-infra-apply:
+infra-apply: package-producer
 	bash infra/apply-guard.sh
 	cd infra && terraform apply
 

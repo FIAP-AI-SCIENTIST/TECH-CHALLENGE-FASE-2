@@ -20,6 +20,12 @@ variable "gcs_location" {
   default     = "us-central1"
 }
 
+variable "region" {
+  description = "Região de deploy de recursos compute (Cloud Function, Cloud Scheduler)"
+  type        = string
+  default     = "us-central1"
+}
+
 variable "alert_email" {
   description = "Email de notificação para erros e faturamento"
   type        = string

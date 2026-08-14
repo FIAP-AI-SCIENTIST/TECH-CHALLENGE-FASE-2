@@ -92,3 +92,15 @@ module "iam" {
 
   depends_on = [module.apis]
 }
+
+# 8. Cloud Function (Gen2) + Cloud Scheduler: dispara o Streaming Producer periodicamente
+module "streaming_function" {
+  source                = "./modules/streaming_function"
+  project_id            = var.project_id
+  region                = var.region
+  bucket_name           = module.storage.bucket_name
+  service_account_email = module.iam.service_account_email
+  source_zip_path       = "${path.root}/.build/producer.zip"
+
+  depends_on = [module.apis, module.storage, module.iam]
+}
