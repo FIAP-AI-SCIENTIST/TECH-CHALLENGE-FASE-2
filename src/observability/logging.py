@@ -109,10 +109,10 @@ def log_execution(unit: str, layer: str):
             },
         )
         _write_audit_safely(run, logger)
+        # O status definido pelo caller (ex.: SUCCESS_WITH_DQ_FAILURE) é preservado.
         raise
     else:
         run.duration_seconds = round(time.monotonic() - start, 3)
-        run.status = "SUCCESS"
         _write_audit_safely(run, logger)
         logger.info(
             "Fim da execução — sucesso",
