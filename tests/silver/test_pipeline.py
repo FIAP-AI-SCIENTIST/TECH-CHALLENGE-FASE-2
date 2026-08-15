@@ -46,7 +46,7 @@ class TestRunSilverRegularEntity:
              patch("silver.pipeline.silver_writer.write_entity", return_value=1) as mock_write:
             run_silver("uf")
 
-        # Hook U8: quality roda sobre o frame deduplicado, uma vez por execução.
+        # Hook Data Quality: quality roda sobre o frame deduplicado, uma vez por execução.
         mock_quality.assert_called_once()
         assert mock_quality.call_args.args[0] == "uf"
 
@@ -60,7 +60,7 @@ class TestRunSilverRegularEntity:
 
 
 class TestRunSilverQualityHook:
-    """Integração U8: run_silver propaga falha CRITICA de Data Quality para a
+    """Integração Data Quality: run_silver propaga falha CRITICA de Data Quality para a
     auditoria (SUCCESS_WITH_DQ_FAILURE) sem desfazer a escrita."""
 
     def test_critical_dq_failure_marks_run_status(self):

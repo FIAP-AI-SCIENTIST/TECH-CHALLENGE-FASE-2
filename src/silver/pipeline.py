@@ -101,7 +101,7 @@ def run_silver(entidade: str) -> None:
             run.rows_read = rows_read
             run.rows_written = rows_written
 
-            # Data Quality (U8): valida o frame deduplicado ainda em memória,
+            # Data Quality (Data Quality): valida o frame deduplicado ainda em memória,
             # após a escrita — falha CRITICA não desfaz a escrita já feita
             # (business-rules regras 6/7); marca a execução na auditoria.
             from quality.pipeline import run_entity_quality_checks

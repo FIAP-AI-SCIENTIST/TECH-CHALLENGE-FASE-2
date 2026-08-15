@@ -4,7 +4,7 @@ tabela SCD2 das entidades de meta.
 Não é usada por `silver.pipeline`: desde a regra 11 do `business-rules.md` a
 cadeia de versões é reconstruída do Bronze a cada execução, então a Silver não
 lê o próprio estado para decidir nada. Quem consome daqui é a Gold (U7, modelo
-dimensional) e a Data Quality (U8, `make quality` sobre o estado atual).
+dimensional) e a Data Quality (Data Quality, `make quality` sobre o estado atual).
 """
 
 import io

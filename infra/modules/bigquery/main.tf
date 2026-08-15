@@ -25,7 +25,7 @@ resource "google_bigquery_table" "audit_log" {
   schema              = <<EOF
 [
   {"name": "run_id", "type": "STRING", "mode": "REQUIRED", "description": "Identificador único da execução"},
-  {"name": "unit", "type": "STRING", "mode": "REQUIRED", "description": "Qual unidade rodou (ex: Bronze_Ingestion)"},
+  {"name": "unit", "type": "STRING", "mode": "REQUIRED", "description": "Qual etapa rodou (ex: Bronze_Ingestion)"},
   {"name": "layer", "type": "STRING", "mode": "REQUIRED", "description": "Camada alvo (ex: Bronze)"},
   {"name": "rows_read", "type": "INT64", "mode": "NULLABLE", "description": "Linhas lidas da origem"},
   {"name": "rows_written", "type": "INT64", "mode": "NULLABLE", "description": "Linhas escritas no destino"},
