@@ -101,6 +101,16 @@ def run_silver(entidade: str) -> None:
             run.rows_read = rows_read
             run.rows_written = rows_written
 
+            # Data Quality (Data Quality): valida o frame deduplicado ainda em memória,
+            # após a escrita — falha CRITICA não desfaz a escrita já feita
+            # (business-rules regras 6/7); marca a execução na auditoria.
+            from quality.pipeline import run_entity_quality_checks
+
+            dq_results = run_entity_quality_checks(entidade, dedupada)
+            if any(not r.passou and r.severidade == "CRITICA" for r in dq_results):
+                run.status = "SUCCESS_WITH_DQ_FAILURE"
+                logger.error(f"Data Quality com falha CRITICA em '{entidade}' — ver data_quality_log.")
+
 
 def run_all_silver() -> None:
     """Processa as 6 entidades com isolamento de falha (mesmo padrão do

@@ -102,3 +102,9 @@ class TestLogExecution:
             with log_execution("u", "l") as r2:
                 id2 = r2.run_id
             assert id1 != id2
+
+    def test_preserves_caller_quality_status(self):
+        with patch("observability.audit.write_audit_row") as mock_write:
+            with log_execution("DataQuality", "Quality") as run:
+                run.status = "SUCCESS_WITH_DQ_FAILURE"
+            assert mock_write.call_args.args[0].status == "SUCCESS_WITH_DQ_FAILURE"

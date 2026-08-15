@@ -25,13 +25,36 @@ resource "google_bigquery_table" "audit_log" {
   schema              = <<EOF
 [
   {"name": "run_id", "type": "STRING", "mode": "REQUIRED", "description": "Identificador único da execução"},
-  {"name": "unit", "type": "STRING", "mode": "REQUIRED", "description": "Qual unidade rodou (ex: Bronze_Ingestion)"},
+  {"name": "unit", "type": "STRING", "mode": "REQUIRED", "description": "Qual etapa rodou (ex: Bronze_Ingestion)"},
   {"name": "layer", "type": "STRING", "mode": "REQUIRED", "description": "Camada alvo (ex: Bronze)"},
   {"name": "rows_read", "type": "INT64", "mode": "NULLABLE", "description": "Linhas lidas da origem"},
   {"name": "rows_written", "type": "INT64", "mode": "NULLABLE", "description": "Linhas escritas no destino"},
   {"name": "duration_seconds", "type": "FLOAT64", "mode": "REQUIRED", "description": "Duração do step"},
   {"name": "status", "type": "STRING", "mode": "REQUIRED", "description": "SUCCESS ou ERROR"},
   {"name": "timestamp", "type": "TIMESTAMP", "mode": "REQUIRED", "description": "Momento da execução"}
+]
+EOF
+}
+
+# Evidência histórica das expectativas Great Expectations por rodada.
+resource "google_bigquery_table" "data_quality_log" {
+  dataset_id          = google_bigquery_dataset.analytics.dataset_id
+  table_id            = "data_quality_log"
+  project             = var.project_id
+  deletion_protection = false
+  schema              = <<EOF
+[
+  {"name":"check_id","type":"STRING","mode":"REQUIRED"},
+  {"name":"check","type":"STRING","mode":"REQUIRED"},
+  {"name":"entidade","type":"STRING","mode":"REQUIRED"},
+  {"name":"dimensao","type":"STRING","mode":"REQUIRED"},
+  {"name":"passou","type":"BOOL","mode":"REQUIRED"},
+  {"name":"valor_medido","type":"FLOAT64","mode":"REQUIRED"},
+  {"name":"limiar","type":"FLOAT64","mode":"REQUIRED"},
+  {"name":"severidade","type":"STRING","mode":"REQUIRED"},
+  {"name":"linhas_afetadas","type":"INT64","mode":"REQUIRED"},
+  {"name":"detalhe","type":"STRING","mode":"NULLABLE"},
+  {"name":"timestamp","type":"TIMESTAMP","mode":"REQUIRED"}
 ]
 EOF
 }
