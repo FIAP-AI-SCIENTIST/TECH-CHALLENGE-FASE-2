@@ -7,6 +7,10 @@ import pyarrow as pa
 from gold.pipeline import run_gold
 
 
+def _mock_create_view():
+    return patch("gold.pipeline.marts.create_view")
+
+
 def _mock_log_execution():
     mock_run = MagicMock()
     mock_log = MagicMock()
@@ -41,6 +45,7 @@ class TestRunGold:
              patch("gold.pipeline.silver_reader.read_scd2_table_raw", return_value=None), \
              patch("gold.pipeline.gcs_lock", new=_mock_lock()), \
              patch("gold.pipeline.log_execution", _mock_log_execution()), \
+             _mock_create_view() as mock_create_view, \
              patch("gold.pipeline.write_table", return_value=1) as mock_write:
             run_gold()
 
@@ -49,6 +54,11 @@ class TestRunGold:
             "dim_uf", "dim_municipio", "dim_rede", "dim_serie",
             "fact_indicador_uf", "fact_indicador_municipio", "fact_alunos",
         }
+        # As 3 views analíticas são criadas após os fatos.
+        views_criadas = [c.args[0] for c in mock_create_view.call_args_list]
+        assert views_criadas == [
+            "mart_evolucao_indicador_uf", "mart_aderencia_metas_uf", "mart_ranking_indicador_municipio",
+        ]
 
     def test_skips_facts_when_silver_not_processed_yet(self):
         # Dims sempre saem (fallback com schema vazio); fatos exigem colunas
@@ -59,9 +69,34 @@ class TestRunGold:
              patch("gold.pipeline.silver_reader.read_scd2_table_raw", return_value=None), \
              patch("gold.pipeline.gcs_lock", new=_mock_lock()), \
              patch("gold.pipeline.log_execution", _mock_log_execution()), \
+             _mock_create_view(), \
              patch("gold.pipeline.write_table") as mock_write:
             run_gold()
 
         tabelas_escritas = {c.args[0] for c in mock_write.call_args_list}
         assert tabelas_escritas == {"dim_uf", "dim_municipio", "dim_rede", "dim_serie"}
+
+    def test_view_failure_is_isolated_and_marks_run_failed(self):
+        """Uma view falhando não impede as demais, mas o
+        run termina com RuntimeError — falha nunca é silenciosa."""
+        import pytest
+
+        empty = pa.Table.from_pydict({})
+
+        def falha_na_segunda(nome):
+            if nome == "mart_aderencia_metas_uf":
+                raise ValueError("view quebrada simulada")
+
+        with patch("gold.pipeline.silver_reader.read_entity", return_value=empty), \
+             patch("gold.pipeline.silver_reader.read_scd2_table_raw", return_value=None), \
+             patch("gold.pipeline.gcs_lock", new=_mock_lock()), \
+             patch("gold.pipeline.log_execution", _mock_log_execution()), \
+             _mock_create_view() as mock_create_view, \
+             patch("gold.pipeline.write_table"):
+            mock_create_view.side_effect = falha_na_segunda
+            with pytest.raises(RuntimeError):
+                run_gold()
+
+        # As 3 views foram tentadas, mesmo com a do meio falhando.
+        assert mock_create_view.call_count == 3
 
