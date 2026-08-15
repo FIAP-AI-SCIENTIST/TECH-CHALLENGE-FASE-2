@@ -1,7 +1,10 @@
 """Testes do módulo extraction.extraction — extração do BigQuery para Bronze."""
 
 from collections import defaultdict
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
+
+from google.api_core.exceptions import PreconditionFailed
 
 import pytest
 
@@ -16,6 +19,18 @@ from extraction.extraction import (
     extract_incremental,
     batched,
 )
+from common.lock import LockHeldError, gcs_lock
+
+
+@pytest.fixture(autouse=True)
+def _mock_lock():
+    """Evita que os testes existentes toquem o GCS real via o novo gcs_lock
+    que envolve _run_extraction — comportamento do lock em si é testado à
+    parte em TestExtractionLock."""
+    with patch("extraction.extraction.gcs_lock") as mock_lock:
+        mock_lock.return_value.__enter__ = MagicMock(return_value=None)
+        mock_lock.return_value.__exit__ = MagicMock(return_value=False)
+        yield mock_lock
 
 
 
@@ -212,3 +227,29 @@ class TestExtractEntity:
                     extract_entity("uf")
                     mock_inc.assert_called_once()
                     mock_full.assert_not_called()
+
+
+
+class TestExtractionLock:
+    """Regressão: _run_extraction é protegida por lock contra execução concorrente
+    da mesma entidade (duas pessoas do grupo rodando `make bronze` ao mesmo tempo)."""
+
+    def test_concurrent_run_same_entity_raises_lock_held_error(self):
+        mock_rows_iter = MagicMock()
+        mock_rows_iter.total_rows = 1
+        mock_rows_iter.__iter__ = lambda self: iter([{"ano": 2023, "sigla_uf": "SP"}])
+
+        # Desfaz o mock global do gcs_lock desta classe para exercitar o lock de
+        # verdade, só mockando o storage.Client subjacente (simula o objeto de
+        # lock já existindo, como se outra execução já tivesse adquirido).
+        with patch("common.lock.storage.Client") as mock_storage_client:
+            mock_blob = MagicMock()
+            mock_blob.upload_from_string.side_effect = PreconditionFailed("already exists")
+            mock_blob.time_created = datetime.now(timezone.utc)  # lock fresco, não obsoleto
+            mock_storage_client.return_value.bucket.return_value.blob.return_value = mock_blob
+
+            with patch("extraction.extraction.bigquery.Client") as mock_bq_client:
+                mock_bq_client.return_value.query.return_value.result.return_value = mock_rows_iter
+                with patch("extraction.extraction.gcs_lock", new=gcs_lock):
+                    with pytest.raises(LockHeldError):
+                        extract_full("uf")
