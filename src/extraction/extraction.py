@@ -27,6 +27,9 @@ SOURCE_DATASET = "basedosdados.br_inep_avaliacao_alfabetizacao"
 BATCH_THRESHOLD = 500_000
 BATCH_SIZE = 50_000
 TIMEOUT_SECONDS = 10
+# Cap de custo: query que estourar 10 GB de scan falha em vez de cobrar —
+# folga de ~5-10x sobre a maior entidade (~4M linhas); aborta só scan acidental caro.
+MAX_BYTES_BILLED = 10 * 2**30
 
 ENTITY_TABLE_MAP = {
     "uf": ("uf", UFRecord),
@@ -55,9 +58,14 @@ def batched(iterable, size: int) -> Iterator[list]:
         yield batch
 
 @with_retry()
-def _do_query(client: bigquery.Client, sql: str):
-    """Operação atômica: roda a query e materializa o RowIterator (com timeout)."""
-    return client.query(sql).result(timeout=TIMEOUT_SECONDS)
+def _do_query(client: bigquery.Client, sql: str) -> tuple:
+    """Operação atômica: roda a query (com cap de bytes) e materializa o RowIterator.
+
+    Retorna ``(rows, total_bytes_processed)`` — o contador do job alimenta a
+    auditoria de custo por execução.
+    """
+    job = client.query(sql, job_config=bigquery.QueryJobConfig(maximum_bytes_billed=MAX_BYTES_BILLED))
+    return job.result(timeout=TIMEOUT_SECONDS), job.total_bytes_processed
 
 
 def _split_into_batches(rows, total_rows) -> Iterable[list]:
@@ -126,7 +134,7 @@ def _run_extraction(entidade: str, sql: str) -> None:
     with gcs_lock(bronze_writer.BUCKET_NAME, f"bronze/.locks/{entidade}.lock"):
         with log_execution(unit="Bronze_Ingestion", layer="Bronze") as run:
             client = bigquery.Client(project=PROJECT_ID)
-            rows = _do_query(client, sql)
+            rows, bytes_processed = _do_query(client, sql)
             row_batches = _split_into_batches(rows, getattr(rows, "total_rows", None))
 
             rows_read = 0
@@ -143,6 +151,7 @@ def _run_extraction(entidade: str, sql: str) -> None:
 
             run.rows_read = rows_read
             run.rows_written = rows_written
+            run.total_bytes_processed = bytes_processed
 
 
 def extract_full(entidade: str) -> None:

@@ -1,11 +1,11 @@
 """Property-Based Testing (Hypothesis) das funções puras de gold.transform —
-NFR Requirements Q-NFR2/NFR2 (idempotência/determinismo), business-rules.md regra 13 (U7).
+idempotência e determinismo de cada dimensão/fato.
 
 Geradores reaproveitados de `contracts.testing.strategies` onde o schema bate 1:1 com o contrato
 (fatos regulares e `fact_alunos` — `_select_existing` só projeta colunas já presentes no contrato
 base). `dim_uf`/`dim_municipio`/`dim_rede`/`dim_serie` e o fato de meta usam estratégias próprias
 porque leem colunas de enriquecimento da Silver (`sigla_uf_nome`, `nome_regiao`, `rede_desc`,
-`serie_desc`, `valid_from`/`valid_to`/`is_current`) que não existem no contrato base da U1 — a
+`serie_desc`, `valid_from`/`valid_to`/`is_current`) que não existem no contrato base — a
 Gold consome a saída já enriquecida, não o registro cru.
 """
 

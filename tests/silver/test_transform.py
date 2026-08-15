@@ -246,7 +246,7 @@ class TestApplyScd2:
 
     def _replay_dos_anos(self):
         """Reproduz o loop de `silver.pipeline.run_silver`: parte de dimensão
-        vazia (regra 11) e aplica os anos do Bronze em ordem cronológica.
+        vazia e aplica os anos do Bronze em ordem cronológica.
         """
         dimensao = pa.Table.from_pylist([], schema=self._SCHEMA)
         for ano, meta in ((2023, 50.0), (2024, 99.0)):
@@ -256,7 +256,7 @@ class TestApplyScd2:
         return dimensao
 
     def test_replay_from_empty_is_deterministic(self):
-        """Regra 11: a tabela SCD2 é função determinística do Bronze. Dois
+        """A tabela SCD2 é função determinística do Bronze. Dois
         replays do mesmo Bronze produzem a mesma tabela — é o que permite
         reconstruir a cadeia a cada execução em vez de acumular versões.
         """

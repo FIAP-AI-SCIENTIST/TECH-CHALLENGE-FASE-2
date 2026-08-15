@@ -12,6 +12,7 @@ from extraction.extraction import (
     BATCH_SIZE,
     BATCH_THRESHOLD,
     ENTITY_TABLE_MAP,
+    MAX_BYTES_BILLED,
     _do_query,
     compute_incremental_years,
     extract_entity,
@@ -45,8 +46,8 @@ class TestDoQuery:
             mock_result,
         ]
         with patch("extraction.extraction.time"):
-            result = _do_query(mock_client, "SELECT 1")
-        assert result is mock_result
+            rows, _bytes = _do_query(mock_client, "SELECT 1")
+        assert rows is mock_result
         assert mock_client.query.return_value.result.call_count == 2
 
     def test_passes_explicit_timeout(self):
@@ -55,6 +56,15 @@ class TestDoQuery:
         mock_client.query.return_value.result.assert_called_once()
         _, kwargs = mock_client.query.return_value.result.call_args
         assert kwargs.get("timeout") == 10
+
+    def test_applies_maximum_bytes_billed_and_returns_bytes_processed(self):
+        """Cap de custo de 10 GB na query + contador de bytes propagado."""
+        mock_client = MagicMock()
+        mock_client.query.return_value.total_bytes_processed = 12345
+        _rows, total_bytes = _do_query(mock_client, "SELECT 1")
+        assert total_bytes == 12345
+        _, kwargs = mock_client.query.call_args
+        assert kwargs["job_config"].maximum_bytes_billed == MAX_BYTES_BILLED
 
 class TestComputeIncrementalYears:
     """Verifica cálculo de anos incrementais."""

@@ -18,7 +18,7 @@ class TestGetDicionario:
 
         with patch("silver.reference.bigquery.Client") as mock_client_cls:
             mock_client_cls.return_value.query.return_value.result.return_value = mock_rows_iter
-            result = get_dicionario("uf", "rede")
+            result, _bytes = get_dicionario("uf", "rede")
 
         assert result == {"1": "Federal", "2": "Estadual"}
 
@@ -28,11 +28,31 @@ class TestGetDicionario:
 
         with patch("silver.reference.bigquery.Client") as mock_client_cls:
             mock_client_cls.return_value.query.return_value.result.return_value = mock_rows_iter
-            get_dicionario("alunos", "presenca")
+            get_dicionario("alunos", "presenca")  # retorno ignorado — teste inspeciona o SQL
 
         sql = mock_client_cls.return_value.query.call_args.args[0]
         assert "id_tabela = 'alunos'" in sql
         assert "nome_coluna = 'presenca'" in sql
+
+
+class TestBytesProcessados:
+    """_do_query devolve (rows, total_bytes_processed) e aplica o cap de 10 GB."""
+
+    def test_returns_bytes_processed_and_applies_cap(self):
+        from silver.reference import MAX_BYTES_BILLED
+
+        mock_rows_iter = MagicMock()
+        mock_rows_iter.__iter__ = lambda self: iter([])
+
+        with patch("silver.reference.bigquery.Client") as mock_client_cls:
+            job = mock_client_cls.return_value.query.return_value
+            job.result.return_value = mock_rows_iter
+            job.total_bytes_processed = 777
+            _result, total_bytes = get_diretorio_uf()
+
+        assert total_bytes == 777
+        _, kwargs = mock_client_cls.return_value.query.call_args
+        assert kwargs["job_config"].maximum_bytes_billed == MAX_BYTES_BILLED
 
 
 class TestGetDiretorioUf:
@@ -45,7 +65,7 @@ class TestGetDiretorioUf:
 
         with patch("silver.reference.bigquery.Client") as mock_client_cls:
             mock_client_cls.return_value.query.return_value.result.return_value = mock_rows_iter
-            result = get_diretorio_uf()
+            result, _bytes = get_diretorio_uf()
 
         assert result == {"SP": "São Paulo", "RJ": "Rio de Janeiro"}
 
@@ -68,7 +88,7 @@ class TestGetDiretorioMunicipio:
 
         with patch("silver.reference.bigquery.Client") as mock_client_cls:
             mock_client_cls.return_value.query.return_value.result.return_value = mock_rows_iter
-            result = get_diretorio_municipio()
+            result, _bytes = get_diretorio_municipio()
 
         assert result == {
             "3550308": {
@@ -80,13 +100,13 @@ class TestGetDiretorioMunicipio:
         }
 
     def test_only_selects_decided_subset_of_columns(self):
-        """Regressão: só o subconjunto decidido em source-schemas.md, não o diretório inteiro."""
+        """Regressão: só o subconjunto de colunas do domínio, não o diretório inteiro."""
         mock_rows_iter = MagicMock()
         mock_rows_iter.__iter__ = lambda self: iter([])
 
         with patch("silver.reference.bigquery.Client") as mock_client_cls:
             mock_client_cls.return_value.query.return_value.result.return_value = mock_rows_iter
-            get_diretorio_municipio()
+            get_diretorio_municipio()  # retorno ignorado — teste inspeciona o SQL
 
         sql = mock_client_cls.return_value.query.call_args.args[0]
         for col in ("id_municipio", "nome", "sigla_uf", "nome_regiao", "capital_uf"):

@@ -31,3 +31,16 @@ class TestWriteTable:
 
         job_config = mock_load.call_args.args[3]
         assert job_config.write_disposition == "WRITE_TRUNCATE"
+
+    def test_calls_ensure_table_before_load(self):
+        """Toda escrita passa pelo ensure_table (DDL de partição/clustering)
+        antes do load — para dim_* é no-op, para fact_* cria a tabela se ausente."""
+        table = pa.table({"ano": [2023], "sigla_uf": ["SP"]})
+
+        with patch("gold.writer.bigquery.Client"), \
+             patch("gold.writer._load"), \
+             patch("gold.writer.gold_schema.ensure_table") as mock_ensure:
+            write_table("fact_indicador_uf", table)
+
+        mock_ensure.assert_called_once()
+        assert mock_ensure.call_args.args[1] == "fact_indicador_uf"

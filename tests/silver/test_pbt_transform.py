@@ -1,5 +1,5 @@
 """Property-Based Testing (Hypothesis) das funções puras de silver.transform —
-Functional Design Q8 / NFR06 (PBT-02 Round-trip, PBT-03 Invariant, bloqueantes)."""
+round-trip e invariantes de normalização/limpeza."""
 
 import io
 
@@ -11,7 +11,7 @@ from hypothesis import strategies as st
 from silver.transform import clean, normalize_key
 
 
-# --- PBT-03 Invariant: normalize_key sempre devolve 7 dígitos numéricos ---
+# --- Invariante: normalize_key sempre devolve 7 dígitos numéricos ---
 
 @given(st.from_regex(r"[0-9]{1,7}", fullmatch=True))
 def test_normalize_key_always_returns_7_digits_for_numeric_input(codigo):
@@ -39,7 +39,7 @@ def test_normalize_key_rejects_too_many_digits(codigo):
     assert normalize_key(codigo) is None
 
 
-# --- PBT-02 Round-trip: saída da Silver serializa/desserializa em Parquet sem perda ---
+# --- Round-trip: saída da Silver serializa/desserializa em Parquet sem perda ---
 
 @given(
     st.lists(

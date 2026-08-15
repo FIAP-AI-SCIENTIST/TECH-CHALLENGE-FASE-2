@@ -8,7 +8,7 @@ partição da Bronze/Silver, aplicada aqui à tabela inteira.
 
 from bronze.writer import BUCKET_NAME
 from common.lock import gcs_lock
-from gold import transform
+from gold import marts, transform
 from gold.writer import write_table
 from observability.logging import log_execution, setup_logger
 from silver import reader as silver_reader
@@ -87,6 +87,17 @@ def run_gold() -> None:
         except Exception as exc:
             falhou = True
             logger.error(f"Falha materializando fato de meta '{entidade}' na Gold: {type(exc).__name__}: {exc}")
+
+    # Views analíticas — só depois dos fatos, que são sua fonte. DDL
+    # idempotente (CREATE OR REPLACE VIEW), sem lock e com isolamento de falha
+    # por view.
+    for nome_view in marts.MART_QUERIES:
+        try:
+            with log_execution(unit="Gold", layer="Gold"):
+                marts.create_view(nome_view)
+        except Exception as exc:
+            falhou = True
+            logger.error(f"Falha criando view '{nome_view}' na Gold: {type(exc).__name__}: {exc}")
 
     if falhou:
         raise RuntimeError("Uma ou mais tabelas falharam na materialização da Gold — ver logs.")

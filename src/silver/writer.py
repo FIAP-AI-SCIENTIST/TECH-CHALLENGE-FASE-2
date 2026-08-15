@@ -27,7 +27,7 @@ def scd2_path(entidade: str) -> str:
 
 def clear_entity(entidade: str, chave: str) -> None:
     """Limpa a partição `ano=` de uma entidade regular antes de reescrever —
-    a Silver é dona dessa partição (business-rules.md regra 13).
+    a Silver é dona dessa partição.
     """
     client = storage.Client()
     prefix = _entity_partition_path(entidade, chave)
@@ -55,7 +55,7 @@ def write_entity(entidade: str, chave: str, table: pa.Table) -> int:
 
 def write_scd2_table(entidade: str, table: pa.Table) -> int:
     """Sobrescreve a tabela SCD2 completa (todas as versões, vigentes e
-    fechadas) — sem chave de partição (business-rules.md regra 14).
+    fechadas) — sem chave de partição.
     """
     client = storage.Client()
     bucket = client.bucket(BUCKET_NAME)

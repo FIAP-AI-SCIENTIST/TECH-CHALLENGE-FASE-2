@@ -24,6 +24,7 @@ def _build_payload(run: RunContext) -> dict:
         "layer": run.layer,
         "rows_read": run.rows_read,
         "rows_written": run.rows_written,
+        "total_bytes_processed": run.total_bytes_processed,
         "duration_seconds": run.duration_seconds,
         "status": run.status,
         "timestamp": run.timestamp.isoformat(),
