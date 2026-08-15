@@ -35,26 +35,3 @@ resource "google_bigquery_table" "audit_log" {
 ]
 EOF
 }
-
-# Tabela de evidência de Data Quality — uma linha por check (duplicidade,
-# valores ausentes, chave de relacionamento, consistência de faixa),
-# passando ou não, gravada pelo componente quality (src/quality).
-resource "google_bigquery_table" "data_quality_log" {
-  dataset_id = google_bigquery_dataset.analytics.dataset_id
-  table_id   = "data_quality_log"
-  project    = var.project_id
-
-  # Mesma justificativa do audit_log: efemeridade do projeto (destroy sem sujeira).
-  deletion_protection = false
-  schema              = <<EOF
-[
-  {"name": "check_id", "type": "STRING", "mode": "REQUIRED", "description": "Identificador único da execução do check"},
-  {"name": "check", "type": "STRING", "mode": "REQUIRED", "description": "Nome do check (ex: duplicidade, valores_ausentes)"},
-  {"name": "entidade", "type": "STRING", "mode": "REQUIRED", "description": "Entidade ou tabela Gold verificada"},
-  {"name": "passou", "type": "BOOL", "mode": "REQUIRED", "description": "Se o check passou"},
-  {"name": "linhas_afetadas", "type": "INT64", "mode": "REQUIRED", "description": "Nº de linhas que violaram a regra"},
-  {"name": "detalhe", "type": "STRING", "mode": "NULLABLE", "description": "Descrição legível do resultado"},
-  {"name": "timestamp", "type": "TIMESTAMP", "mode": "REQUIRED", "description": "Momento da verificação"}
-]
-EOF
-}

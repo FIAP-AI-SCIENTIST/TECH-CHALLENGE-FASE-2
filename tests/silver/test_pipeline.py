@@ -41,15 +41,12 @@ class TestRunSilverRegularEntity:
              patch("silver.pipeline.bronze_reader.read_partition", return_value=bruta), \
              patch("silver.pipeline.reference.get_dicionario", return_value={}), \
              patch("silver.pipeline.reference.get_diretorio_uf", return_value={}), \
-             patch("silver.pipeline.run_quality_checks") as mock_quality, \
              patch("silver.pipeline.silver_writer.clear_entity") as mock_clear, \
              patch("silver.pipeline.silver_writer.write_entity", return_value=1) as mock_write:
             run_silver("uf")
 
-        mock_quality.assert_called_once()
-        assert mock_quality.call_args.args[0] == "uf"
-
         assert mock_clear.call_count == 2
+
         assert mock_write.call_count == 2
         chaves_escritas = {c.args[1] for c in mock_write.call_args_list}
         assert chaves_escritas == {"ano=2023", "ano=2024"}
@@ -81,7 +78,6 @@ class TestRunSilverScd2Entity:
              patch("silver.pipeline.bronze_reader.read_partition", return_value=self._BRUTA), \
              patch("silver.pipeline.reference.get_dicionario", return_value={}), \
              patch("silver.pipeline.reference.get_diretorio_uf", return_value={}), \
-
              patch("silver.pipeline.silver_writer.write_scd2_table") as mock_write:
             run_silver("meta_alfabetizacao_uf")
 

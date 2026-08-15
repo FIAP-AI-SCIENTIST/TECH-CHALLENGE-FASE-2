@@ -41,8 +41,7 @@ class TestRunGold:
              patch("gold.pipeline.silver_reader.read_scd2_table_raw", return_value=None), \
              patch("gold.pipeline.gcs_lock", new=_mock_lock()), \
              patch("gold.pipeline.log_execution", _mock_log_execution()), \
-             patch("gold.pipeline.write_table", return_value=1) as mock_write, \
-             patch("gold.pipeline.write_quality_results"):
+             patch("gold.pipeline.write_table", return_value=1) as mock_write:
             run_gold()
 
         tabelas_escritas = {c.args[0] for c in mock_write.call_args_list}
@@ -66,19 +65,3 @@ class TestRunGold:
         tabelas_escritas = {c.args[0] for c in mock_write.call_args_list}
         assert tabelas_escritas == {"dim_uf", "dim_municipio", "dim_rede", "dim_serie"}
 
-    def test_referential_check_runs_before_writing_fact(self):
-        uf = pa.table({"ano": [2023], "sigla_uf": ["SP"], "sigla_uf_nome": ["São Paulo"], "taxa_alfabetizacao": [80.0]})
-        empty = pa.Table.from_pydict({})
-
-        with patch("gold.pipeline.silver_reader.read_entity", side_effect=lambda e: uf if e == "uf" else empty), \
-             patch("gold.pipeline.silver_reader.read_scd2_table_raw", return_value=None), \
-             patch("gold.pipeline.gcs_lock", new=_mock_lock()), \
-             patch("gold.pipeline.log_execution", _mock_log_execution()), \
-             patch("gold.pipeline.write_table", return_value=1), \
-             patch("gold.pipeline.check_referential_integrity") as mock_check, \
-             patch("gold.pipeline.write_quality_results"):
-            run_gold()
-
-        chamadas_fact_uf = [c for c in mock_check.call_args_list if c.args[0] == "fact_indicador_uf"]
-        assert len(chamadas_fact_uf) == 1
-        assert chamadas_fact_uf[0].args[2] == "sigla_uf"

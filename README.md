@@ -21,7 +21,6 @@ Arquitetura Lambda (camada batch + camada streaming convergindo na mesma camada 
 - **Observabilidade**: cada execução (batch ou streaming) registra uma linha na tabela de auditoria BigQuery (`alfabetizacao_analytics.pipeline_audit_log`) com `run_id`, linhas lidas/escritas, duração e status; logs estruturados em JSON; Consumer Lag do Pub/Sub monitorado via `num_undelivered_messages`; alerta por e-mail em erro. O `run_id` da auditoria é o mesmo que nomeia o arquivo Parquet do micro-batch de streaming, ligando cada arquivo da Bronze à sua linha de auditoria.
 - **Silver**: `silver.pipeline.run_silver` lê a Bronze inteira de uma entidade, traduz códigos (`rede`/`serie`) e enriquece com os diretórios de UF/município via os dicionários do BigQuery público, normaliza `id_municipio` para 7 dígitos IBGE, deduplica por chave de negócio (resolve reentrega at-least-once do streaming) e aplica SCD Tipo 2 nas três tabelas de meta (nova versão só quando os valores rastreados mudam). Grava de volta no GCS: `ano=` para as entidades regulares (uf/município/alunos), tabela cumulativa sem partição para as de meta.
 - **Gold**: `gold.pipeline.run_gold` lê a Silver inteira e materializa um modelo dimensional (Kimball) no BigQuery (`alfabetizacao_analytics`) — 4 dimensões (`dim_uf`, `dim_municipio`, `dim_rede`, `dim_serie`) e 6 fatos (`fact_indicador_uf`, `fact_indicador_municipio`, `fact_alunos`, `fact_meta_resultado_{brasil,uf,municipio}`, este último comparando resultado observado x meta definida para o mesmo ano). Cada tabela é recriada do zero a cada execução (`WRITE_TRUNCATE`) — sem merge incremental, sem estado próprio.
-- **Data Quality**: `quality.checks` implementa as 4 regras pedidas (duplicidade, valores ausentes, chave de relacionamento, consistência de faixa) como funções puras sobre Arrow, testáveis sem GCS/BigQuery. Roda em dois pontos: dentro do `run_silver` (por entidade, logo após a deduplicação) e na Gold (`gold.pipeline`, checando toda FK de fato contra a dimensão correspondente — a única verificação que só faz sentido com as duas tabelas já materializadas). Cada rodada é gravada no BigQuery (`alfabetizacao_analytics.data_quality_log`), passando ou não — histórico de qualidade, não só alerta pontual.
 
 ## Stack e por que essas escolhas
 
@@ -54,8 +53,6 @@ Isso preserva o histórico da Bronze sem depender de transações, ao custo de n
 
 **Gold materializada via load job direto no BigQuery, não dbt.** O comentário original do Terraform previa dbt para a Gold (`main.tf` do módulo BigQuery), mas o projeto não tem — nem precisa de — um projeto dbt para 10 tabelas pequenas: introduzir `profiles.yml`, modelos SQL e o runner do dbt só para recriar o que o Python já faz (DuckDB para o SQL set-based, PyArrow para o schema) duplicaria ferramenta para o mesmo resultado. Cada dimensão/fato é uma função pura testável em `gold.transform` (mesmo padrão de `silver.transform`); a escrita usa `load_table_from_file` com `WRITE_TRUNCATE` e schema inferido do próprio Parquet — sem exigir DDL prévio no Terraform, sem staging, sem camada extra de orquestração SQL.
 
-**Data Quality em Python puro, não Great Expectations/dbt tests.** As quatro regras pedidas (duplicidade, valores ausentes, chave de relacionamento, consistência de faixa) cabem em quatro funções `pyarrow`/`duckdb` (`quality/checks.py`), testadas isoladamente sem nenhum framework externo. Great Expectations resolveria o mesmo problema com uma API mais rica (expectation suites, data docs), mas exigiria uma nova dependência, configuração própria e um formato de relatório paralelo ao que o resto do projeto já usa (log estruturado + tabela BigQuery) — desproporcional ao número de regras do desafio. Fica registrado como troca natural se a suíte de regras crescer.
-
 **Comparação meta x resultado usa o próprio ano da versão SCD2, não um join com os fatos de indicador.** As tabelas de meta já carregam, na mesma linha, o resultado observado (`taxa_alfabetizacao`) e a trajetória de metas futuras (`meta_alfabetizacao_2024..2030`) — comparar contra o alvo do próprio ano da linha evita um join client-side com granularidade diferente (indicador é por `serie`, meta não). O custo dessa escolha: se a trajetória **e** a participação ficarem idênticas entre dois anos consecutivos, o SCD2 não abre versão nova (só rastreia essas colunas) e aquele ano específico não aparece isolado em `fact_meta_resultado_*` — na prática isso não ocorre, porque `percentual_participacao` varia ano a ano.
 
 ## FinOps
@@ -77,7 +74,6 @@ src/
 ├── streaming/         # Producer (eventos sintéticos -> Pub/Sub) e Consumer (Pub/Sub -> Bronze)
 ├── silver/            # Limpeza, tradução de código, normalização de chave, dedup, SCD Tipo 2
 ├── gold/              # Modelo dimensional (Kimball) materializado no BigQuery
-├── quality/           # Checks de Data Quality (duplicidade, nulos, chave, consistência) + evidência no BigQuery
 ├── common/            # Retry compartilhado (backoff exponencial) e lock exclusivo baseado em GCS
 └── observability/     # Logging estruturado, auditoria BigQuery e monitoramento (Consumer Lag)
 infra/                 # Terraform: toda a infra GCP (efêmera — sobe e destrói por demanda)
@@ -133,14 +129,13 @@ make infra-apply                                # cria dataset BigQuery, bucket 
 
 ```bash
 make install                                     # cria venv e instala o pacote em modo dev
-make test                                        # roda toda a suíte (contratos, bronze, extração, observabilidade, streaming, silver, gold, quality)
+make test                                        # roda toda a suíte (contratos, bronze, extração, observabilidade, streaming, silver, gold)
 
 make bronze                                      # extrai as 6 entidades do BigQuery público -> Bronze (batch)
 make streaming-producer TIPO=indicador N=5        # publica 5 eventos sintéticos no Pub/Sub
 make streaming-consumer                          # consome o lote disponível e grava na Bronze
 make silver                                      # limpa, integra e deduplica a Bronze -> Silver (GCS)
 make gold                                        # materializa dimensões e fatos da Silver -> Gold (BigQuery)
-make quality                                     # roda os checks de Data Quality contra o estado atual da Silver, sem reprocessar nada
 ```
 
 Em produção, o Producer roda sozinho via Cloud Scheduler → Cloud Function (sem intervenção manual); o Consumer, por ora, roda sob demanda (`make streaming-consumer`) — um pull single-shot não tem o mesmo encaixe natural de agendamento que o Producer tem.
@@ -157,14 +152,7 @@ Todos os recursos gerenciados pelo Terraform foram desenhados para serem efêmer
 
 ## Qualidade e testes
 
-Suíte de testes unitários e de contrato por camada (`tests/`), incluindo Property-Based Testing (Hypothesis) nas funções puras de contratos (round-trip de serialização, invariantes de schema).
-
-Validação explícita de qualidade de dados (`quality/`) roda em dois pontos:
-
-- **Silver** (`silver.pipeline.run_silver`, por entidade, logo após a deduplicação): duplicidade (a chave de dedup já aplicada volta a ser verificada, evidência de que a garantia se sustenta), valores ausentes em colunas obrigatórias, consistência de faixa (percentuais em `[0, 100]`, proficiência dentro da escala Saeb).
-- **Gold** (`gold.pipeline`, ao montar cada fato): chave de relacionamento — toda FK de um fato (`sigla_uf`, `id_municipio`) precisa resolver contra a dimensão correspondente (`dim_uf`, `dim_municipio`); só faz sentido aqui porque exige as duas tabelas já materializadas.
-
-Cada rodada de checks — passando ou não — é gravada em `alfabetizacao_analytics.data_quality_log`, no mesmo padrão de auditoria já usado para execução (`pipeline_audit_log`). `make quality` roda os checks ad hoc contra o estado atual da Silver, sem reprocessar nada.
+Suíte de testes unitários e de contrato por camada (`tests/`), incluindo Property-Based Testing (Hypothesis) nas funções puras de contratos (round-trip de serialização, invariantes de schema). Validação de qualidade de dados (duplicidade, nulos, chaves, consistência) fica para a unit de Data Quality, sobre Silver/Gold.
 
 ## Aplicação em IA
 
@@ -176,7 +164,7 @@ A camada Gold (modelo dimensional no BigQuery, `alfabetizacao_analytics`) é o p
 - **Feature store para ML no grão do aluno**: `fact_alunos` já entrega a granularidade mais fina (proficiência individual, presença, preenchimento) para features de modelos supervisionados sem precisar voltar à Silver/Bronze.
 - **Busca por similaridade**: um banco vetorial sobre embeddings de perfil municipal (ver trade-off de NoSQL acima) permitiria consultas como "encontrar municípios com contexto parecido ao do município X" — útil para transferência de boas práticas entre gestões locais comparáveis.
 
-Os modelos em si não estão implementados neste MVP — a Gold dimensional (dimensões + fatos, com Data Quality validando as FKs) já organiza os dados no formato que esse tipo de modelo consome; o próximo passo é treinar contra `alfabetizacao_analytics` diretamente do BigQuery (BigQuery ML ou export para notebook).
+Os modelos em si não estão implementados neste MVP — a Gold dimensional (dimensões + fatos) já organiza os dados no formato que esse tipo de modelo consome; o próximo passo é treinar contra `alfabetizacao_analytics` diretamente do BigQuery (BigQuery ML ou export para notebook).
 
 ## Roadmap
 
@@ -187,7 +175,7 @@ Os modelos em si não estão implementados neste MVP — a Gold dimensional (dim
 - [x] Bronze — ingestão streaming (Producer sintético + Consumer, Cloud Function + Scheduler)
 - [x] Silver — limpeza, padronização, normalização de chaves, SCD Tipo 2
 - [x] Gold — modelo dimensional (Kimball) materializado no BigQuery
-- [x] Data Quality — duplicidade, valores ausentes, chave de relacionamento, consistência de faixa (Python puro sobre Silver/Gold)
+- [ ] Data Quality — testes de qualidade mapeados às seis dimensões, sobre Silver e Gold
 - [ ] Enriquecimento com fontes externas (Censo Escolar/INEP, IBGE, FUNDEB) — opcional, fora do MVP
 - [ ] Modelos de ML sobre a Gold (predição de risco, clusterização de desigualdade educacional)
 
