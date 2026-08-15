@@ -46,6 +46,7 @@ class TestRunSilverRegularEntity:
             run_silver("uf")
 
         assert mock_clear.call_count == 2
+
         assert mock_write.call_count == 2
         chaves_escritas = {c.args[1] for c in mock_write.call_args_list}
         assert chaves_escritas == {"ano=2023", "ano=2024"}

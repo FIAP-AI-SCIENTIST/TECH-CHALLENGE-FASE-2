@@ -19,7 +19,8 @@ Arquitetura Lambda (camada batch + camada streaming convergindo na mesma camada 
 - **Streaming**: `producer` gera eventos sintéticos (indicador/medição/meta) e publica no tópico Pub/Sub `alfabetizacao-streaming-events`, disparado por Cloud Scheduler via Cloud Function (Gen2). `consumer` faz pull da subscription, decodifica pelo contrato Pydantic correspondente e grava micro-batches na mesma Bronze, particionados por data de ingestão (`data_ingestao=YYYY-MM-DD`). A escrita é append-only: cada execução do consumer grava um arquivo próprio (`part-{run_id}.parquet`) e nunca limpa a partição do dia, então micro-batches sucessivos se somam em vez de se substituírem.
 - **Contratos**: modelos Pydantic (`contracts/models.py`) validam e serializam para Arrow/Parquet, garantindo que Bronze batch e Bronze streaming escrevam sob o mesmo schema por entidade.
 - **Observabilidade**: cada execução (batch ou streaming) registra uma linha na tabela de auditoria BigQuery (`alfabetizacao_analytics.pipeline_audit_log`) com `run_id`, linhas lidas/escritas, duração e status; logs estruturados em JSON; Consumer Lag do Pub/Sub monitorado via `num_undelivered_messages`; alerta por e-mail em erro. O `run_id` da auditoria é o mesmo que nomeia o arquivo Parquet do micro-batch de streaming, ligando cada arquivo da Bronze à sua linha de auditoria.
-- **Silver e Gold** são as próximas units do roadmap (modelagem dimensional Kimball, SCD Tipo 2, integração das bases) — ainda não implementadas; a Bronze já está pronta para alimentá-las.
+- **Silver**: `silver.pipeline.run_silver` lê a Bronze inteira de uma entidade, traduz códigos (`rede`/`serie`) e enriquece com os diretórios de UF/município via os dicionários do BigQuery público, normaliza `id_municipio` para 7 dígitos IBGE, deduplica por chave de negócio (resolve reentrega at-least-once do streaming) e aplica SCD Tipo 2 nas três tabelas de meta (nova versão só quando os valores rastreados mudam). Grava de volta no GCS: `ano=` para as entidades regulares (uf/município/alunos), tabela cumulativa sem partição para as de meta.
+- **Gold**: `gold.pipeline.run_gold` lê a Silver inteira e materializa um modelo dimensional (Kimball) no BigQuery (`alfabetizacao_analytics`) — 4 dimensões (`dim_uf`, `dim_municipio`, `dim_rede`, `dim_serie`) e 6 fatos (`fact_indicador_uf`, `fact_indicador_municipio`, `fact_alunos`, `fact_meta_resultado_{brasil,uf,municipio}`, este último comparando resultado observado x meta definida para o mesmo ano). Cada tabela é recriada do zero a cada execução (`WRITE_TRUNCATE`) — sem merge incremental, sem estado próprio.
 
 ## Stack e por que essas escolhas
 
@@ -48,7 +49,11 @@ Arquitetura Lambda (camada batch + camada streaming convergindo na mesma camada 
 
 Isso preserva o histórico da Bronze sem depender de transações, ao custo de não ter merge/upsert. Se a Silver (SCD Tipo 2) precisar de merge incremental mais sofisticado, um open table format entra como candidato natural nessa unit futura.
 
-**NoSQL fora do MVP.** Pelo CAP Theorem e pela decisão de persistência poliglota, o projeto não introduz um banco NoSQL de serving no MVP — o BigQuery (Gold, unit futura) já cobre consulta analítica dimensional. Um caso de uso de IA aplicada (ex.: buscar municípios com perfil educacional similar via embeddings, servidos por um banco vetorial) fica registrado como extensão natural pós-MVP, não como lacuna do design atual.
+**NoSQL fora do MVP.** Pelo CAP Theorem e pela decisão de persistência poliglota, o projeto não introduz um banco NoSQL de serving no MVP — o BigQuery (Gold) já cobre consulta analítica dimensional. Um caso de uso de IA aplicada (ex.: buscar municípios com perfil educacional similar via embeddings, servidos por um banco vetorial) fica registrado como extensão natural pós-MVP, não como lacuna do design atual.
+
+**Gold materializada via load job direto no BigQuery, não dbt.** O comentário original do Terraform previa dbt para a Gold (`main.tf` do módulo BigQuery), mas o projeto não tem — nem precisa de — um projeto dbt para 10 tabelas pequenas: introduzir `profiles.yml`, modelos SQL e o runner do dbt só para recriar o que o Python já faz (DuckDB para o SQL set-based, PyArrow para o schema) duplicaria ferramenta para o mesmo resultado. Cada dimensão/fato é uma função pura testável em `gold.transform` (mesmo padrão de `silver.transform`); a escrita usa `load_table_from_file` com `WRITE_TRUNCATE` e schema inferido do próprio Parquet — sem exigir DDL prévio no Terraform, sem staging, sem camada extra de orquestração SQL.
+
+**Comparação meta x resultado usa o próprio ano da versão SCD2, não um join com os fatos de indicador.** As tabelas de meta já carregam, na mesma linha, o resultado observado (`taxa_alfabetizacao`) e a trajetória de metas futuras (`meta_alfabetizacao_2024..2030`) — comparar contra o alvo do próprio ano da linha evita um join client-side com granularidade diferente (indicador é por `serie`, meta não). O custo dessa escolha: se a trajetória **e** a participação ficarem idênticas entre dois anos consecutivos, o SCD2 não abre versão nova (só rastreia essas colunas) e aquele ano específico não aparece isolado em `fact_meta_resultado_*` — na prática isso não ocorre, porque `percentual_participacao` varia ano a ano.
 
 ## FinOps
 
@@ -56,6 +61,7 @@ Isso preserva o histórico da Bronze sem depender de transações, ao custo de n
 - **Free tier estrito**: nenhum serviço sem free tier generoso entra no design (sem Dataflow, Composer ou Dataproc); GCS, BigQuery (1TB de query/mês), Pub/Sub (10GB/mês) e Cloud Functions (2M invocações/mês) cobrem o volume do projeto.
 - **Infraestrutura efêmera**: todo o Terraform é desenhado para subir e cair sem sujeira — bucket com `force_destroy`, dataset com `delete_contents_on_destroy = true`, tabela de auditoria sem `deletion_protection`. Suba só para testar/demonstrar, rode `make infra-destroy` depois. A única exceção é o bucket de state (`<project>-tfstate`), criado fora do Terraform pelo `bootstrap.sh` justamente por ser pré-requisito dele — some com ele à mão quando encerrar o projeto de vez.
 - **Egress**: co-localizar o processamento na mesma nuvem da fonte (BigQuery público) evita custo de transferência entre nuvens — ver trade-off de cloud única acima.
+- **Gold recomputada, não incremental**: com o volume atual (dezenas de milhares de linhas nas maiores entidades), reler a Silver inteira e sobrescrever a Gold por completo (`WRITE_TRUNCATE`) é mais simples e mais barato em engenharia do que rastrear o que mudou — o custo de processamento fica dentro do free tier de BigQuery (1TB de query/mês cobre esse load job com folga). Se o volume crescer a ponto de o full-recompute pesar no orçamento, merge incremental por partição de `ano` é o próximo passo natural.
 - **Least privilege como controle de custo indireto**: a service account central (`alfabetizacao-pipeline-sa`) recebe papéis com escopo de recurso sempre que o GCP oferece um (Storage Object Admin no bucket específico, BigQuery Data Editor no dataset específico, Pub/Sub Publisher/Subscriber no tópico/subscription específicos). Dois papéis não têm equivalente com escopo de recurso no IAM do GCP e ficam necessariamente no nível do projeto: `roles/bigquery.jobUser` (rodar query/insert é uma operação de projeto, não de dataset) e `roles/monitoring.viewer` (ler a métrica de Consumer Lag). Nada além disso — reduz a superfície de uso indevido de cota.
 
 ## Estrutura do repositório
@@ -66,7 +72,9 @@ src/
 ├── extraction/       # Extração full/incremental do BigQuery público -> Bronze
 ├── bronze/           # Leitura/escrita de partições Parquet no GCS
 ├── streaming/         # Producer (eventos sintéticos -> Pub/Sub) e Consumer (Pub/Sub -> Bronze)
-├── common/            # Retry compartilhado (backoff exponencial)
+├── silver/            # Limpeza, tradução de código, normalização de chave, dedup, SCD Tipo 2
+├── gold/              # Modelo dimensional (Kimball) materializado no BigQuery
+├── common/            # Retry compartilhado (backoff exponencial) e lock exclusivo baseado em GCS
 └── observability/     # Logging estruturado, auditoria BigQuery e monitoramento (Consumer Lag)
 infra/                 # Terraform: toda a infra GCP (efêmera — sobe e destrói por demanda)
 tests/                 # Testes espelhando src/, incluindo Property-Based Testing (Hypothesis)
@@ -121,11 +129,13 @@ make infra-apply                                # cria dataset BigQuery, bucket 
 
 ```bash
 make install                                     # cria venv e instala o pacote em modo dev
-make test                                        # roda toda a suíte (contratos, bronze, extração, observabilidade, streaming)
+make test                                        # roda toda a suíte (contratos, bronze, extração, observabilidade, streaming, silver, gold)
 
 make bronze                                      # extrai as 6 entidades do BigQuery público -> Bronze (batch)
 make streaming-producer TIPO=indicador N=5        # publica 5 eventos sintéticos no Pub/Sub
 make streaming-consumer                          # consome o lote disponível e grava na Bronze
+make silver                                      # limpa, integra e deduplica a Bronze -> Silver (GCS)
+make gold                                        # materializa dimensões e fatos da Silver -> Gold (BigQuery)
 ```
 
 Em produção, o Producer roda sozinho via Cloud Scheduler → Cloud Function (sem intervenção manual); o Consumer, por ora, roda sob demanda (`make streaming-consumer`) — um pull single-shot não tem o mesmo encaixe natural de agendamento que o Producer tem.
@@ -146,14 +156,15 @@ Suíte de testes unitários e de contrato por camada (`tests/`), incluindo Prope
 
 ## Aplicação em IA
 
-A camada Gold (modelo dimensional, unit futura) é o ponto natural para alimentar modelos preditivos e analíticos sobre o indicador de alfabetização:
+A camada Gold (modelo dimensional no BigQuery, `alfabetizacao_analytics`) é o ponto de partida para modelos preditivos e analíticos sobre o indicador de alfabetização:
 
-- **Predição de risco de não-alfabetização**: modelo supervisionado (features territoriais + metas históricas + série temporal por município) para sinalizar municípios/escolas com maior probabilidade de ficar abaixo da meta, permitindo intervenção antes do resultado da avaliação.
-- **Desigualdade educacional**: clusterização de municípios por perfil socioeducacional (combinando indicador de alfabetização com dados territoriais) para identificar grupos comparáveis e medir o efeito real de políticas públicas, isolando o contexto socioeconômico.
-- **Apoio à decisão de política pública**: séries temporais por UF/município para simular cenários ("o que aconteceria com a meta nacional se a UF X replicasse a trajetória da UF Y") e priorizar investimento onde o retorno marginal em alfabetização é maior.
+- **Predição de risco de não-alfabetização**: modelo supervisionado sobre `fact_indicador_municipio` + `fact_meta_resultado_municipio` (features territoriais via `dim_municipio` + metas históricas + série temporal por município) para sinalizar municípios/escolas com maior probabilidade de ficar abaixo da meta, permitindo intervenção antes do resultado da avaliação.
+- **Desigualdade educacional**: clusterização de municípios por perfil socioeducacional (combinando `fact_indicador_municipio` com os atributos territoriais de `dim_municipio` — região, capital) para identificar grupos comparáveis e medir o efeito real de políticas públicas, isolando o contexto socioeconômico.
+- **Apoio à decisão de política pública**: séries temporais em `fact_meta_resultado_{uf,municipio}` (`gap_pontos`, `atingiu_meta` por ano) para simular cenários ("o que aconteceria com a meta nacional se a UF X replicasse a trajetória da UF Y") e priorizar investimento onde o retorno marginal em alfabetização é maior.
+- **Feature store para ML no grão do aluno**: `fact_alunos` já entrega a granularidade mais fina (proficiência individual, presença, preenchimento) para features de modelos supervisionados sem precisar voltar à Silver/Bronze.
 - **Busca por similaridade**: um banco vetorial sobre embeddings de perfil municipal (ver trade-off de NoSQL acima) permitiria consultas como "encontrar municípios com contexto parecido ao do município X" — útil para transferência de boas práticas entre gestões locais comparáveis.
 
-Nenhum desses modelos está implementado neste MVP — dependem da Gold materializada (Silver/Gold são as próximas units); a arquitetura atual (contratos tipados, Bronze imutável, Gold dimensional planejada) já organiza os dados no formato que esse tipo de modelo consome.
+Os modelos em si não estão implementados neste MVP — a Gold dimensional (dimensões + fatos) já organiza os dados no formato que esse tipo de modelo consome; o próximo passo é treinar contra `alfabetizacao_analytics` diretamente do BigQuery (BigQuery ML ou export para notebook).
 
 ## Roadmap
 
@@ -162,9 +173,11 @@ Nenhum desses modelos está implementado neste MVP — dependem da Gold material
 - [x] Observabilidade (logging, auditoria, monitoramento)
 - [x] Bronze — ingestão batch (extração full/incremental do BigQuery público)
 - [x] Bronze — ingestão streaming (Producer sintético + Consumer, Cloud Function + Scheduler)
-- [ ] Silver — limpeza, padronização, normalização de chaves, SCD Tipo 2
-- [ ] Gold — modelo dimensional (Kimball) materializado no BigQuery
-- [ ] Data Quality — testes de qualidade mapeados às seis dimensões (dbt/Great Expectations)
+- [x] Silver — limpeza, padronização, normalização de chaves, SCD Tipo 2
+- [x] Gold — modelo dimensional (Kimball) materializado no BigQuery
+- [ ] Data Quality — testes de qualidade mapeados às seis dimensões, sobre Silver e Gold
+- [ ] Enriquecimento com fontes externas (Censo Escolar/INEP, IBGE, FUNDEB) — opcional, fora do MVP
+- [ ] Modelos de ML sobre a Gold (predição de risco, clusterização de desigualdade educacional)
 
 ## Evidências de execução
 
