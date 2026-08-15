@@ -2,7 +2,7 @@
 name = "pipeline-alfabetizacao"
 version = "0.1.0"
 description = "Tech Challenge Fase 2 - Pipeline Hibrido"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 dependencies = [
     "pydantic>=2.0",
     "pyarrow",
@@ -12,6 +12,7 @@ dependencies = [
     "google-cloud-pubsub",
     "duckdb",
     "numpy",
+    "great_expectations>=1.20,<2.0",
 ]
 
 [project.optional-dependencies]
