@@ -41,9 +41,14 @@ class TestRunSilverRegularEntity:
              patch("silver.pipeline.bronze_reader.read_partition", return_value=bruta), \
              patch("silver.pipeline.reference.get_dicionario", return_value={}), \
              patch("silver.pipeline.reference.get_diretorio_uf", return_value={}), \
+             patch("quality.pipeline.run_entity_quality_checks", return_value=[]) as mock_quality, \
              patch("silver.pipeline.silver_writer.clear_entity") as mock_clear, \
              patch("silver.pipeline.silver_writer.write_entity", return_value=1) as mock_write:
             run_silver("uf")
+
+        # Hook U8: quality roda sobre o frame deduplicado, uma vez por execução.
+        mock_quality.assert_called_once()
+        assert mock_quality.call_args.args[0] == "uf"
 
         assert mock_clear.call_count == 2
 
@@ -52,6 +57,63 @@ class TestRunSilverRegularEntity:
         assert chaves_escritas == {"ano=2023", "ano=2024"}
         assert mock_run.rows_read == 2
         assert mock_run.rows_written == 2
+
+
+class TestRunSilverQualityHook:
+    """Integração U8: run_silver propaga falha CRITICA de Data Quality para a
+    auditoria (SUCCESS_WITH_DQ_FAILURE) sem desfazer a escrita."""
+
+    def test_critical_dq_failure_marks_run_status(self):
+        from quality.translate import QualityResult
+
+        bruta = pa.table({
+            "ano": [2024], "sigla_uf": ["SP"], "serie": ["2"], "rede": ["0"],
+        })
+        falha_critica = QualityResult(
+            check_id="uf.duplicidade", check="duplicidade", entidade="uf",
+            dimensao="Unicidade", passou=False, valor_medido=0.5, limiar=1.0,
+            severidade="CRITICA", linhas_afetadas=1,
+        )
+        mock_log, mock_run = _mock_log_execution()
+
+        with patch("silver.pipeline.gcs_lock", new=_mock_lock()), \
+             patch("silver.pipeline.log_execution", mock_log), \
+             patch("silver.pipeline.bronze_reader.read_partition", return_value=bruta), \
+             patch("silver.pipeline.reference.get_dicionario", return_value={}), \
+             patch("silver.pipeline.reference.get_diretorio_uf", return_value={}), \
+             patch("quality.pipeline.run_entity_quality_checks", return_value=[falha_critica]), \
+             patch("silver.pipeline.silver_writer.clear_entity"), \
+             patch("silver.pipeline.silver_writer.write_entity", return_value=1) as mock_write:
+            run_silver("uf")
+
+        assert mock_run.status == "SUCCESS_WITH_DQ_FAILURE"
+        # A escrita aconteceu normalmente — DQ não desfaz partição.
+        mock_write.assert_called_once()
+
+    def test_warning_only_dq_keeps_success_status(self):
+        from quality.translate import QualityResult
+
+        bruta = pa.table({
+            "ano": [2024], "sigla_uf": ["SP"], "serie": ["2"], "rede": ["0"],
+        })
+        aviso = QualityResult(
+            check_id="uf.frescor_dado", check="frescor_dado", entidade="uf",
+            dimensao="Atualidade", passou=False, valor_medido=0.0, limiar=1.0,
+            severidade="AVISO", linhas_afetadas=0,
+        )
+        mock_log, mock_run = _mock_log_execution()
+
+        with patch("silver.pipeline.gcs_lock", new=_mock_lock()), \
+             patch("silver.pipeline.log_execution", mock_log), \
+             patch("silver.pipeline.bronze_reader.read_partition", return_value=bruta), \
+             patch("silver.pipeline.reference.get_dicionario", return_value={}), \
+             patch("silver.pipeline.reference.get_diretorio_uf", return_value={}), \
+             patch("quality.pipeline.run_entity_quality_checks", return_value=[aviso]), \
+             patch("silver.pipeline.silver_writer.clear_entity"), \
+             patch("silver.pipeline.silver_writer.write_entity", return_value=1):
+            run_silver("uf")
+
+        assert mock_run.status != "SUCCESS_WITH_DQ_FAILURE"
 
 
 class TestRunSilverScd2Entity:
@@ -78,6 +140,7 @@ class TestRunSilverScd2Entity:
              patch("silver.pipeline.bronze_reader.read_partition", return_value=self._BRUTA), \
              patch("silver.pipeline.reference.get_dicionario", return_value={}), \
              patch("silver.pipeline.reference.get_diretorio_uf", return_value={}), \
+             patch("quality.pipeline.run_entity_quality_checks", return_value=[]), \
              patch("silver.pipeline.silver_writer.write_scd2_table") as mock_write:
             run_silver("meta_alfabetizacao_uf")
 
@@ -121,6 +184,7 @@ class TestRunSilverScd2Entity:
              patch("silver.pipeline.bronze_reader.read_partition", return_value=self._BRUTA), \
              patch("silver.pipeline.reference.get_dicionario", return_value={}), \
              patch("silver.pipeline.reference.get_diretorio_uf", return_value={}), \
+             patch("quality.pipeline.run_entity_quality_checks", return_value=[]), \
              patch("silver.reader.read_scd2_table", return_value=residuo), \
              patch("silver.pipeline.silver_writer.write_scd2_table") as mock_write:
             run_silver("meta_alfabetizacao_uf")
