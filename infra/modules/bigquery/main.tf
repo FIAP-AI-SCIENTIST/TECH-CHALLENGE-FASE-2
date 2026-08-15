@@ -35,3 +35,26 @@ resource "google_bigquery_table" "audit_log" {
 ]
 EOF
 }
+
+# Evidência histórica das expectativas Great Expectations por rodada.
+resource "google_bigquery_table" "data_quality_log" {
+  dataset_id          = google_bigquery_dataset.analytics.dataset_id
+  table_id            = "data_quality_log"
+  project             = var.project_id
+  deletion_protection = false
+  schema              = <<EOF
+[
+  {"name":"check_id","type":"STRING","mode":"REQUIRED"},
+  {"name":"check","type":"STRING","mode":"REQUIRED"},
+  {"name":"entidade","type":"STRING","mode":"REQUIRED"},
+  {"name":"dimensao","type":"STRING","mode":"REQUIRED"},
+  {"name":"passou","type":"BOOL","mode":"REQUIRED"},
+  {"name":"valor_medido","type":"FLOAT64","mode":"REQUIRED"},
+  {"name":"limiar","type":"FLOAT64","mode":"REQUIRED"},
+  {"name":"severidade","type":"STRING","mode":"REQUIRED"},
+  {"name":"linhas_afetadas","type":"INT64","mode":"REQUIRED"},
+  {"name":"detalhe","type":"STRING","mode":"NULLABLE"},
+  {"name":"timestamp","type":"TIMESTAMP","mode":"REQUIRED"}
+]
+EOF
+}
