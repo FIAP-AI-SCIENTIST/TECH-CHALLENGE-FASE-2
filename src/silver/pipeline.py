@@ -30,21 +30,32 @@ ENTIDADES = [
 ]
 
 
-def _load_referencias(entidade: str) -> dict:
+def _load_referencias(entidade: str) -> tuple[dict, int]:
     """Carrega os mapas de tradução necessários para a entidade — cada uma
-    usa só um subconjunto (domain-entities.md)."""
-    referencias: dict = {"rede": reference.get_dicionario(entidade, "rede")}
+    usa só um subconjunto de cada uma.
+
+    Retorna ``(referencias, total_bytes_processed)``: a soma dos bytes das
+    consultas de referência é auditada no run da entidade.
+    """
+    referencias: dict = {}
+    total_bytes = 0
+
+    referencias["rede"], b = reference.get_dicionario(entidade, "rede")
+    total_bytes += b or 0
 
     if entidade in ("uf", "municipio"):
-        referencias["serie"] = reference.get_dicionario(entidade, "serie")
+        referencias["serie"], b = reference.get_dicionario(entidade, "serie")
+        total_bytes += b or 0
 
     if entidade in ("uf", "meta_alfabetizacao_uf"):
-        referencias["diretorio_uf"] = reference.get_diretorio_uf()
+        referencias["diretorio_uf"], b = reference.get_diretorio_uf()
+        total_bytes += b or 0
 
     if entidade in ("municipio", "meta_alfabetizacao_municipio"):
-        referencias["diretorio_municipio"] = reference.get_diretorio_municipio()
+        referencias["diretorio_municipio"], b = reference.get_diretorio_municipio()
+        total_bytes += b or 0
 
-    return referencias
+    return referencias, total_bytes
 
 
 def run_silver(entidade: str) -> None:
@@ -52,10 +63,10 @@ def run_silver(entidade: str) -> None:
     limpa -> deduplica -> (agrupa por ano | SCD2) -> escreve.
 
     Protegida por lock exclusivo (`common.lock.gcs_lock`) — a mesma corrida
-    de concorrência já corrigida na U4 (Bronze) se aplica aqui: `clear` e
+    de concorrência já corrigida na ingestão Bronze se aplica aqui: `clear` e
     `write` intercalados entre duas execuções deixariam a partição com
     arquivos de runs diferentes. As 3 entidades de meta são reconstruídas do
-    Bronze a cada execução (regra 11), então não há mais leitura-decide-escreve
+    Bronze a cada execução, então não há mais leitura-decide-escreve
     a proteger — só a escrita da tabela derivada.
     """
     logger = setup_logger()
@@ -65,7 +76,7 @@ def run_silver(entidade: str) -> None:
             bruta = bronze_reader.read_partition(entidade)
             rows_read = bruta.num_rows
 
-            referencias = _load_referencias(entidade)
+            referencias, total_bytes = _load_referencias(entidade)
             limpa, rejeitadas = clean(entidade, bruta, referencias)
             if rejeitadas:
                 logger.warning(
@@ -84,7 +95,7 @@ def run_silver(entidade: str) -> None:
             elif entidade in ENTIDADES_META:
                 schema_scd2 = _with_scd2_columns(dedupada.schema)
                 # A cadeia de versões é reconstruída do zero a cada execução
-                # (business-rules.md regra 11): a tabela SCD2 é derivada do
+                # a tabela SCD2 é sempre derivada do
                 # Bronze, então partir do estado persistido tornava o replay
                 # não idempotente — o ano mais antigo era comparado contra a
                 # versão vigente deixada pelo ano mais recente do run
@@ -100,6 +111,7 @@ def run_silver(entidade: str) -> None:
 
             run.rows_read = rows_read
             run.rows_written = rows_written
+            run.total_bytes_processed = total_bytes
 
             # Data Quality (Data Quality): valida o frame deduplicado ainda em memória,
             # após a escrita — falha CRITICA não desfaz a escrita já feita

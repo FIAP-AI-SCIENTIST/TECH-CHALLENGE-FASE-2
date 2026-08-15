@@ -39,8 +39,8 @@ class TestRunSilverRegularEntity:
         with patch("silver.pipeline.gcs_lock", new=_mock_lock()), \
              patch("silver.pipeline.log_execution", mock_log), \
              patch("silver.pipeline.bronze_reader.read_partition", return_value=bruta), \
-             patch("silver.pipeline.reference.get_dicionario", return_value={}), \
-             patch("silver.pipeline.reference.get_diretorio_uf", return_value={}), \
+             patch("silver.pipeline.reference.get_dicionario", return_value=({}, 0)), \
+             patch("silver.pipeline.reference.get_diretorio_uf", return_value=({}, 0)), \
              patch("quality.pipeline.run_entity_quality_checks", return_value=[]) as mock_quality, \
              patch("silver.pipeline.silver_writer.clear_entity") as mock_clear, \
              patch("silver.pipeline.silver_writer.write_entity", return_value=1) as mock_write:
@@ -79,8 +79,8 @@ class TestRunSilverQualityHook:
         with patch("silver.pipeline.gcs_lock", new=_mock_lock()), \
              patch("silver.pipeline.log_execution", mock_log), \
              patch("silver.pipeline.bronze_reader.read_partition", return_value=bruta), \
-             patch("silver.pipeline.reference.get_dicionario", return_value={}), \
-             patch("silver.pipeline.reference.get_diretorio_uf", return_value={}), \
+             patch("silver.pipeline.reference.get_dicionario", return_value=({}, 0)), \
+             patch("silver.pipeline.reference.get_diretorio_uf", return_value=({}, 0)), \
              patch("quality.pipeline.run_entity_quality_checks", return_value=[falha_critica]), \
              patch("silver.pipeline.silver_writer.clear_entity"), \
              patch("silver.pipeline.silver_writer.write_entity", return_value=1) as mock_write:
@@ -106,8 +106,8 @@ class TestRunSilverQualityHook:
         with patch("silver.pipeline.gcs_lock", new=_mock_lock()), \
              patch("silver.pipeline.log_execution", mock_log), \
              patch("silver.pipeline.bronze_reader.read_partition", return_value=bruta), \
-             patch("silver.pipeline.reference.get_dicionario", return_value={}), \
-             patch("silver.pipeline.reference.get_diretorio_uf", return_value={}), \
+             patch("silver.pipeline.reference.get_dicionario", return_value=({}, 0)), \
+             patch("silver.pipeline.reference.get_diretorio_uf", return_value=({}, 0)), \
              patch("quality.pipeline.run_entity_quality_checks", return_value=[aviso]), \
              patch("silver.pipeline.silver_writer.clear_entity"), \
              patch("silver.pipeline.silver_writer.write_entity", return_value=1):
@@ -138,8 +138,8 @@ class TestRunSilverScd2Entity:
         with patch("silver.pipeline.gcs_lock", new=_mock_lock()), \
              patch("silver.pipeline.log_execution", mock_log), \
              patch("silver.pipeline.bronze_reader.read_partition", return_value=self._BRUTA), \
-             patch("silver.pipeline.reference.get_dicionario", return_value={}), \
-             patch("silver.pipeline.reference.get_diretorio_uf", return_value={}), \
+             patch("silver.pipeline.reference.get_dicionario", return_value=({}, 0)), \
+             patch("silver.pipeline.reference.get_diretorio_uf", return_value=({}, 0)), \
              patch("quality.pipeline.run_entity_quality_checks", return_value=[]), \
              patch("silver.pipeline.silver_writer.write_scd2_table") as mock_write:
             run_silver("meta_alfabetizacao_uf")
@@ -153,7 +153,7 @@ class TestRunSilverScd2Entity:
         assert currents[0]["meta_alfabetizacao_2024"] == 99.0
 
     def test_persisted_scd2_state_does_not_leak_into_the_output(self):
-        """Regra 11: a tabela SCD2 é reconstruída do Bronze a cada execução.
+        """A tabela SCD2 é reconstruída do Bronze a cada execução.
         Um estado persistido divergente (resíduo de um run anterior) não pode
         influenciar a saída — era exatamente por aí que a cadeia de versões
         duplicava a cada `make silver`, com versões fechadas antes de abrir.
@@ -182,8 +182,8 @@ class TestRunSilverScd2Entity:
         with patch("silver.pipeline.gcs_lock", new=_mock_lock()), \
              patch("silver.pipeline.log_execution", mock_log), \
              patch("silver.pipeline.bronze_reader.read_partition", return_value=self._BRUTA), \
-             patch("silver.pipeline.reference.get_dicionario", return_value={}), \
-             patch("silver.pipeline.reference.get_diretorio_uf", return_value={}), \
+             patch("silver.pipeline.reference.get_dicionario", return_value=({}, 0)), \
+             patch("silver.pipeline.reference.get_diretorio_uf", return_value=({}, 0)), \
              patch("quality.pipeline.run_entity_quality_checks", return_value=[]), \
              patch("silver.reader.read_scd2_table", return_value=residuo), \
              patch("silver.pipeline.silver_writer.write_scd2_table") as mock_write:

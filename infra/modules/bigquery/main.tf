@@ -29,6 +29,7 @@ resource "google_bigquery_table" "audit_log" {
   {"name": "layer", "type": "STRING", "mode": "REQUIRED", "description": "Camada alvo (ex: Bronze)"},
   {"name": "rows_read", "type": "INT64", "mode": "NULLABLE", "description": "Linhas lidas da origem"},
   {"name": "rows_written", "type": "INT64", "mode": "NULLABLE", "description": "Linhas escritas no destino"},
+  {"name": "total_bytes_processed", "type": "INT64", "mode": "NULLABLE", "description": "Bytes processados pela query BigQuery (quando aplicavel)"},
   {"name": "duration_seconds", "type": "FLOAT64", "mode": "REQUIRED", "description": "Duração do step"},
   {"name": "status", "type": "STRING", "mode": "REQUIRED", "description": "SUCCESS ou ERROR"},
   {"name": "timestamp", "type": "TIMESTAMP", "mode": "REQUIRED", "description": "Momento da execução"}

@@ -20,6 +20,7 @@ class RunContext:
     timestamp: datetime
     rows_read: int | None = None
     rows_written: int | None = None
+    total_bytes_processed: int | None = None  # bytes scaneados pela query BigQuery
     duration_seconds: float = 0.0
     status: str = "SUCCESS"
 
@@ -39,7 +40,7 @@ class _JSONFormatter(logging.Formatter):
         for key in ("run_id", "unit", "layer", "status"):
             if hasattr(record, key):
                 payload[key] = getattr(record, key)
-        for key in ("rows_read", "rows_written", "duration_seconds"):
+        for key in ("rows_read", "rows_written", "duration_seconds", "total_bytes_processed"):
             val = getattr(record, key, None)
             if val is not None:
                 payload[key] = val
@@ -123,6 +124,7 @@ def log_execution(unit: str, layer: str):
                 "status": run.status,
                 "rows_read": run.rows_read,
                 "rows_written": run.rows_written,
+                "total_bytes_processed": run.total_bytes_processed,
                 "duration_seconds": run.duration_seconds,
             },
         )
