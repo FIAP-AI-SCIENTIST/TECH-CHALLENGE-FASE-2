@@ -22,7 +22,7 @@ def st_pbt_model(draw):
 @given(st.lists(st_pbt_model(), max_size=100))
 def test_serialization_roundtrip(models):
     """
-    Property-Based Test (PBT-02: Round-trip).
+    Property-Based Test de round-trip.
     Garante que qualquer conversão Pydantic -> PyArrow -> Pydantic gera
     os mesmos dados sem corrupção e sem crash do PyArrow.
     """

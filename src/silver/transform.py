@@ -1,6 +1,5 @@
 """Transformações da camada Silver — normalização de chave, tradução de código,
-deduplicação e SCD Tipo 2. Ver `aidlc-docs/construction/U6-Silver/functional-design/`
-para o desenho completo das regras de negócio.
+deduplicação e SCD Tipo 2.
 """
 
 from collections import defaultdict
@@ -9,17 +8,17 @@ import duckdb
 import pyarrow as pa
 import pyarrow.compute as pc
 
-# Entidades regulares: Silver é dona de `ano=`, reescreve por ano (business-rules.md regra 13).
+# Entidades regulares: Silver é dona de `ano=`, reescreve por ano.
 ENTIDADES_REGULARES = {"uf", "municipio", "alunos"}
-# Entidades de meta: versionadas via SCD2, tabela cumulativa sem partição por ano (regra 14).
+# Entidades de meta: versionadas via SCD2, tabela cumulativa sem partição por ano.
 ENTIDADES_META = {
     "meta_alfabetizacao_brasil",
     "meta_alfabetizacao_uf",
     "meta_alfabetizacao_municipio",
 }
 
-# Chave de deduplicação por entidade (domain-entities.md) — resolve duplicata
-# do at-least-once do streaming (business-rules.md regra 7).
+# Chave de deduplicação por entidade — resolve duplicata
+# do at-least-once do streaming.
 DEDUPE_KEYS: dict[str, list[str]] = {
     "uf": ["ano", "sigla_uf", "serie", "rede"],
     "municipio": ["ano", "id_municipio", "serie", "rede"],
@@ -29,14 +28,14 @@ DEDUPE_KEYS: dict[str, list[str]] = {
     "meta_alfabetizacao_municipio": ["ano", "id_municipio", "rede"],
 }
 
-# Chave natural do SCD2 (sem `ano` — é o que muda de versão) — domain-entities.md.
+# Chave natural do SCD2 (sem `ano` — é o que muda de versão).
 SCD2_NATURAL_KEYS: dict[str, list[str]] = {
     "meta_alfabetizacao_brasil": ["rede"],
     "meta_alfabetizacao_uf": ["sigla_uf", "rede"],
     "meta_alfabetizacao_municipio": ["id_municipio", "rede"],
 }
 
-# Colunas rastreadas pelo SCD2 — mudança em qualquer uma gera nova versão (regra 10).
+# Colunas rastreadas pelo SCD2 — mudança em qualquer uma gera nova versão.
 SCD2_TRACKED_COLUMNS = [
     "meta_alfabetizacao_2024",
     "meta_alfabetizacao_2025",
@@ -56,7 +55,7 @@ def normalize_key(raw_id_municipio: str | None) -> str | None:
 
     Retorna `None` se a entrada for vazia ou se, após o padding, não resultar
     em exatamente 7 dígitos numéricos — quem chama decide como tratar a
-    rejeição (business-rules.md regra 4: nunca descarte silencioso, sempre
+    rejeição (nunca descarte silencioso, sempre
     contabilizado).
     """
     if raw_id_municipio is None:
@@ -110,7 +109,7 @@ def clean(entidade: str, tabela: pa.Table, referencias: dict) -> tuple[pa.Table,
 
     `referencias` é o dict de mapas de tradução (chaves possíveis: "rede",
     "serie", "diretorio_uf", "diretorio_municipio" — cada entidade usa só o
-    que precisa, conforme `domain-entities.md`).
+    que precisa).
 
     Retorna (tabela limpa, nº de linhas rejeitadas por `id_municipio`
     inválido — nunca descartadas silenciosamente, contabilizadas aqui pra o
@@ -181,9 +180,8 @@ def clean(entidade: str, tabela: pa.Table, referencias: dict) -> tuple[pa.Table,
 
 
 def dedupe(entidade: str, tabela: pa.Table) -> pa.Table:
-    """Remove duplicatas pela chave natural da entidade (business-rules.md
-    regra 7 — resolve reentrega at-least-once do streaming). Em empate,
-    mantém a última ocorrência lida (regra 8).
+    """Remove duplicatas pela chave natural da entidade — resolve reentrega
+    at-least-once do streaming. Em empate, mantém a última ocorrência lida.
     """
     if tabela.num_rows == 0:
         return tabela
@@ -208,8 +206,8 @@ def dedupe(entidade: str, tabela: pa.Table) -> pa.Table:
 def group_by_ano(tabela: pa.Table) -> dict[int, pa.Table]:
     """Reagrupa uma tabela Silver limpa por `ano` — necessário porque
     `bronze.reader.read_partition` devolve todos os anos concatenados (batch
-    `ano=` + streaming `data_ingestao=`, já unidos pelo reader da U4), e a
-    Silver é dona de `ano=` na escrita (business-rules.md regra 13). Só usada
+    `ano=` + streaming `data_ingestao=`, já unidos pelo reader da Bronze), e a
+    Silver é dona de `ano=` na escrita. Só usada
     pelas 3 entidades regulares.
     """
     if tabela.num_rows == 0:
@@ -236,11 +234,11 @@ def _with_scd2_columns(schema: pa.Schema) -> pa.Schema:
 def apply_scd2(entidade: str, dimension_atual: pa.Table, incoming: pa.Table, ano: int) -> pa.Table:
     """Aplica SCD Tipo 2 — abre nova versão só quando os valores rastreados
     (`SCD2_TRACKED_COLUMNS`) mudam em relação à última versão vigente da
-    mesma chave natural (business-rules.md regra 10). `ano` é o ano de
+    mesma chave natural. `ano` é o ano de
     referência desta chamada, usado como `valid_from`/`valid_to`.
 
     `dimension_atual` é a cadeia de versões acumulada pelos anos anteriores
-    **desta mesma execução**, nunca o estado persistido no GCS (regra 11):
+    **desta mesma execução**, nunca o estado persistido no GCS:
     `silver.pipeline.run_silver` parte de tabela vazia e replaya os anos do
     Bronze em ordem cronológica, o que faz da tabela SCD2 uma função
     determinística do Bronze — duas execuções sobre o mesmo Bronze produzem

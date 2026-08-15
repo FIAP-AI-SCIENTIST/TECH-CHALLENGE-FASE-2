@@ -39,7 +39,7 @@ class TestTableDdl:
         assert "CLUSTER BY id_municipio" in TABLE_DDL["fact_alunos"]
 
     def test_meta_resultado_brasil_sem_cluster(self):
-        """Chave `rede` tem cardinalidade ~4 — clustering não ganha nada (NFR2.6)."""
+        """Chave `rede` tem cardinalidade ~4 — clustering não ganha nada."""
         assert "CLUSTER BY" not in TABLE_DDL["fact_meta_resultado_brasil"]
 
     def test_dims_not_in_registry(self):

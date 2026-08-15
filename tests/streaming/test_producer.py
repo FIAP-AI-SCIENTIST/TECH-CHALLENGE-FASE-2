@@ -15,7 +15,7 @@ from streaming.producer import (
 
 
 class TestGerarEventoSintetico:
-    """Verifica geração de eventos sintéticos (função pura, PBT-01)."""
+    """Verifica geração de eventos sintéticos (função pura)."""
 
     def test_medicao_returns_valid_instance(self):
         for _ in range(20):
