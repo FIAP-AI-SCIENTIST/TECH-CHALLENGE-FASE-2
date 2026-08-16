@@ -43,11 +43,12 @@ class TestRunGold:
                 "uf": uf, "municipio": municipio, "alunos": alunos,
              }[e]), \
              patch("gold.pipeline.silver_reader.read_scd2_table_raw", return_value=None), \
-             patch("gold.pipeline.get_diretorio_uf", return_value={"SP": "São Paulo", "RJ": "Rio de Janeiro", "DF": "Distrito Federal"}), \
-             patch("gold.pipeline.get_diretorio_municipio", return_value={
+             patch("gold.pipeline.get_diretorio_uf", return_value=(
+                 {"SP": "São Paulo", "RJ": "Rio de Janeiro", "DF": "Distrito Federal"}, 1024)), \
+             patch("gold.pipeline.get_diretorio_municipio", return_value=({
                  "3550308": {"nome": "São Paulo", "sigla_uf": "SP", "nome_regiao": "Sudeste", "capital_uf": "1"},
                  "3304557": {"nome": "Rio de Janeiro", "sigla_uf": "RJ", "nome_regiao": "Sudeste", "capital_uf": "1"},
-             }), \
+             }, 2048)), \
              patch("gold.pipeline.gcs_lock", new=_mock_lock()), \
              patch("gold.pipeline.log_execution", _mock_log_execution()), \
              _mock_create_view() as mock_create_view, \
@@ -70,8 +71,8 @@ class TestRunGold:
         # da fonte, então são pulados quando a Silver ainda não rodou.
         empty = pa.Table.from_pydict({})
 
-        with patch("gold.pipeline.get_diretorio_uf", return_value={}), \
-             patch("gold.pipeline.get_diretorio_municipio", return_value={}), \
+        with patch("gold.pipeline.get_diretorio_uf", return_value=({}, 0)), \
+             patch("gold.pipeline.get_diretorio_municipio", return_value=({}, 0)), \
              patch("gold.pipeline.silver_reader.read_entity", return_value=empty), \
              patch("gold.pipeline.silver_reader.read_scd2_table_raw", return_value=None), \
              patch("gold.pipeline.gcs_lock", new=_mock_lock()), \
@@ -94,7 +95,9 @@ class TestRunGold:
             if nome == "mart_aderencia_metas_uf":
                 raise ValueError("view quebrada simulada")
 
-        with patch("gold.pipeline.silver_reader.read_entity", return_value=empty), \
+        with patch("gold.pipeline.get_diretorio_uf", return_value=({}, 0)), \
+             patch("gold.pipeline.get_diretorio_municipio", return_value=({}, 0)), \
+             patch("gold.pipeline.silver_reader.read_entity", return_value=empty), \
              patch("gold.pipeline.silver_reader.read_scd2_table_raw", return_value=None), \
              patch("gold.pipeline.gcs_lock", new=_mock_lock()), \
              patch("gold.pipeline.log_execution", _mock_log_execution()), \
@@ -106,4 +109,42 @@ class TestRunGold:
 
         # As 3 views foram tentadas, mesmo com a do meio falhando.
         assert mock_create_view.call_count == 3
+
+    def test_reads_diretorio_through_real_reference_contract(self):
+        """Regressão: `get_diretorio_*` devolve `(dict, bytes)`, não `dict`.
+
+        Aqui só o I/O (`_do_query`) é mockado — as funções reais de
+        `silver.reference` rodam, então qualquer divergência de contrato entre
+        elas e a Gold quebra este teste (o mock de `get_diretorio_*` usado nos
+        demais casos não pega esse tipo de erro).
+        """
+        empty = pa.Table.from_pydict({})
+        uf_rows = [
+            {"sigla": "SP", "nome": "São Paulo"},
+            {"sigla": "DF", "nome": "Distrito Federal"},
+            {"sigla": "RR", "nome": "Roraima"},
+        ]
+        municipio_rows = [
+            {"id_municipio": "5219308", "nome": "Santa Helena de Goiás",
+             "sigla_uf": "GO", "nome_regiao": "Centro-Oeste", "capital_uf": "0"},
+        ]
+
+        def do_query(_client, sql):
+            return (uf_rows if "uf" in sql.split("`")[1].rsplit(".", 1)[-1] else municipio_rows), 512
+
+        with patch("silver.reference.bigquery.Client"), \
+             patch("silver.reference._do_query", side_effect=do_query), \
+             patch("gold.pipeline.silver_reader.read_entity", return_value=empty), \
+             patch("gold.pipeline.silver_reader.read_scd2_table_raw", return_value=None), \
+             patch("gold.pipeline.gcs_lock", new=_mock_lock()), \
+             patch("gold.pipeline.log_execution", _mock_log_execution()), \
+             _mock_create_view(), \
+             patch("gold.pipeline.write_table", return_value=1) as mock_write:
+            run_gold()
+
+        escritas = {c.args[0]: c.args[1] for c in mock_write.call_args_list}
+        # F1: DF e RR presentes na dim mesmo sem linha de resultado na Silver.
+        assert set(escritas["dim_uf"].column("sigla_uf").to_pylist()) == {"SP", "DF", "RR"}
+        # F2: município que a entidade `municipio` do INEP omite.
+        assert escritas["dim_municipio"].column("id_municipio").to_pylist() == ["5219308"]
 
