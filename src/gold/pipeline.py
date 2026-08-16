@@ -67,14 +67,17 @@ def _diretorio_municipio_to_arrow(diretorio: dict[str, dict]) -> pa.Table:
             "nome": pa.array([], type=pa.string()),
             "sigla_uf": pa.array([], type=pa.string()),
             "nome_regiao": pa.array([], type=pa.string()),
-            "capital_uf": pa.array([], type=pa.string()),
+            "capital_uf": pa.array([], type=pa.int64()),
         })
+    # Só `id_municipio` tem tipo forçado (chave normalizada); o resto segue o
+    # tipo do diretório — `capital_uf` é INT64 na fonte, igual ao que a Silver
+    # já monta em `_municipio_dict_to_table`.
     return pa.table({
         "id_municipio": pa.array([id_mun for id_mun, _ in itens], type=pa.string()),
-        "nome": pa.array([d["nome"] for _, d in itens], type=pa.string()),
-        "sigla_uf": pa.array([d["sigla_uf"] for _, d in itens], type=pa.string()),
-        "nome_regiao": pa.array([d["nome_regiao"] for _, d in itens], type=pa.string()),
-        "capital_uf": pa.array([d["capital_uf"] for _, d in itens], type=pa.string()),
+        "nome": [d["nome"] for _, d in itens],
+        "sigla_uf": [d["sigla_uf"] for _, d in itens],
+        "nome_regiao": [d["nome_regiao"] for _, d in itens],
+        "capital_uf": [d["capital_uf"] for _, d in itens],
     })
 
 
