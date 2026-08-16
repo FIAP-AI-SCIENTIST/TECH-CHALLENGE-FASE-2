@@ -9,6 +9,7 @@ import pytest
 
 from bronze.reader import (
     BUCKET_NAME,
+    count_partition_rows,
     list_bronze_years,
     parse_partition_path,
     read_partition,
@@ -177,3 +178,63 @@ class TestReadPartition:
 
         # Retorna tabela vazia
         assert isinstance(result, pa.Table)
+
+
+class TestCountPartitionRows:
+    """Verifica contagem de linhas via metadado do rodapé Parquet, sem decodificar colunas."""
+
+    def _make_parquet_bytes(self, n_rows: int) -> bytes:
+        table = pa.Table.from_pydict({
+            "ano": pa.array([2023] * n_rows),
+            "proficiencia": pa.array([500.0] * n_rows),
+        })
+        buf = io.BytesIO()
+        pq.write_table(table, buf)
+        return buf.getvalue()
+
+    def test_sums_rows_across_blobs(self):
+        blobs = []
+        for ano, n_rows in [(2023, 3), (2024, 5)]:
+            blob = MagicMock()
+            blob.name = f"bronze/alunos/ano={ano}/part-0.parquet"
+            blob.download_as_bytes.return_value = self._make_parquet_bytes(n_rows)
+            blobs.append(blob)
+
+        with patch("bronze.reader.storage.Client") as mock_client_cls:
+            mock_bucket = MagicMock()
+            mock_client_cls.return_value.bucket.return_value = mock_bucket
+            mock_bucket.list_blobs.return_value = blobs
+
+            total = count_partition_rows("alunos")
+
+        assert total == 8
+
+    def test_skips_non_parquet_files(self):
+        mock_blob = MagicMock()
+        mock_blob.name = "bronze/uf/ano=2023/metadata.txt"
+
+        with patch("bronze.reader.storage.Client") as mock_client_cls:
+            mock_bucket = MagicMock()
+            mock_client_cls.return_value.bucket.return_value = mock_bucket
+            mock_bucket.list_blobs.return_value = [mock_blob]
+
+            total = count_partition_rows("uf")
+
+        assert total == 0
+
+    def test_does_not_decode_columns(self):
+        """Regressão: usa ParquetFile.metadata, nunca pq.read_table (que decodificaria colunas)."""
+        blob = MagicMock()
+        blob.name = "bronze/alunos/ano=2023/part-0.parquet"
+        blob.download_as_bytes.return_value = self._make_parquet_bytes(4)
+
+        with patch("bronze.reader.storage.Client") as mock_client_cls, \
+             patch("bronze.reader.pq.read_table") as mock_read_table:
+            mock_bucket = MagicMock()
+            mock_client_cls.return_value.bucket.return_value = mock_bucket
+            mock_bucket.list_blobs.return_value = [blob]
+
+            total = count_partition_rows("alunos")
+
+        mock_read_table.assert_not_called()
+        assert total == 4

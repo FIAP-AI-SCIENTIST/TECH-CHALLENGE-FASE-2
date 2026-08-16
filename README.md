@@ -175,7 +175,7 @@ Os modelos em si não estão implementados neste MVP — a Gold dimensional (dim
 - [x] Bronze — ingestão streaming (Producer sintético + Consumer, Cloud Function + Scheduler)
 - [x] Silver — limpeza, padronização, normalização de chaves, SCD Tipo 2
 - [x] Gold — modelo dimensional (Kimball) materializado no BigQuery
-- [ ] Data Quality — testes de qualidade mapeados às seis dimensões, sobre Silver e Gold
+- [x] Data Quality — testes de qualidade mapeados às seis dimensões, sobre Silver e Gold
 - [ ] Enriquecimento com fontes externas (Censo Escolar/INEP, IBGE, FUNDEB) — opcional, fora do MVP
 - [ ] Modelos de ML sobre a Gold (predição de risco, clusterização de desigualdade educacional)
 
