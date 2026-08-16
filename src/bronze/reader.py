@@ -89,6 +89,25 @@ def read_partition(entidade: str, chave: str | None = None) -> pa.Table:
     return pa.concat_tables(tables)
 
 
+def count_partition_rows(entidade: str) -> int:
+    """Conta linhas de todas as partições da entidade sem decodificar colunas.
+
+    Usa o metadado do rodapé do Parquet (``ParquetFile(...).metadata.num_rows``) em vez de
+    ``pq.read_table`` — evita decodificar colunas inteiras (proficiência, presença, etc.) só
+    para descartar o conteúdo e devolver um inteiro. Reaproveita a mesma listagem/download de
+    blobs (com retry) de `read_partition`.
+    """
+    client = storage.Client()
+    blobs = _list_blobs_for_entity(client, BUCKET_NAME, entidade)
+    total = 0
+    for blob in blobs:
+        if not blob.name.endswith(".parquet"):
+            continue
+        content = _download_blob(blob)
+        total += pq.ParquetFile(io.BytesIO(content)).metadata.num_rows
+    return total
+
+
 @with_retry()
 def _download_blob(blob: storage.Blob) -> bytes:
     """Baixa o conteúdo de um blob."""
