@@ -16,38 +16,37 @@ from gold.transform import (
 
 class TestBuildDimUf:
     def test_distinct_by_sigla(self):
-        uf = pa.table({
+        diretorio = pa.table({
             "sigla_uf": ["SP", "SP", "RJ"],
-            "sigla_uf_nome": ["São Paulo", "São Paulo", "Rio de Janeiro"],
+            "nome": ["São Paulo", "São Paulo", "Rio de Janeiro"],
         })
-        dim = build_dim_uf(uf)
+        dim = build_dim_uf(diretorio)
         assert dim.num_rows == 2
         assert set(dim.column("sigla_uf").to_pylist()) == {"SP", "RJ"}
 
     def test_missing_columns_returns_empty(self):
-        uf = pa.table({"ano": [2023]})
-        dim = build_dim_uf(uf)
+        diretorio = pa.table({"ano": [2023]})
+        dim = build_dim_uf(diretorio)
         assert dim.num_rows == 0
         assert set(dim.column_names) == {"sigla_uf", "nome"}
 
 
 class TestBuildDimMunicipio:
-    def test_keeps_most_recent_year_per_id(self):
-        municipio = pa.table({
-            "id_municipio": ["3550308", "3550308"],
-            "nome": ["São Paulo (antigo)", "São Paulo"],
-            "sigla_uf": ["SP", "SP"],
-            "nome_regiao": ["Sudeste", "Sudeste"],
-            "capital_uf": [1, 1],
-            "ano": [2023, 2024],
+    def test_distinct_by_id(self):
+        diretorio = pa.table({
+            "id_municipio": ["3550308", "3550308", "3304557"],
+            "nome": ["São Paulo", "São Paulo", "Rio de Janeiro"],
+            "sigla_uf": ["SP", "SP", "RJ"],
+            "nome_regiao": ["Sudeste", "Sudeste", "Sudeste"],
+            "capital_uf": [1, 1, 1],
         })
-        dim = build_dim_municipio(municipio)
-        assert dim.num_rows == 1
-        assert dim.column("nome").to_pylist() == ["São Paulo"]
+        dim = build_dim_municipio(diretorio)
+        assert dim.num_rows == 2
+        assert set(dim.column("id_municipio").to_pylist()) == {"3550308", "3304557"}
 
     def test_missing_id_returns_empty(self):
-        municipio = pa.table({"ano": [2023]})
-        dim = build_dim_municipio(municipio)
+        diretorio = pa.table({"ano": [2023]})
+        dim = build_dim_municipio(diretorio)
         assert dim.num_rows == 0
 
 

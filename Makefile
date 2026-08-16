@@ -1,4 +1,4 @@
-.PHONY: install test test-contracts test-extraction test-streaming test-silver test-gold test-quality bronze silver gold quality streaming-producer streaming-consumer clean package-producer infra-init infra-plan infra-apply infra-destroy
+.PHONY: install test test-contracts test-extraction test-streaming test-silver test-gold test-quality bronze silver gold quality streaming-producer streaming-consumer clean package-producer infra-init infra-plan infra-apply infra-destroy pipeline pipeline-from-scratch
 
 # O projeto reside num CIFS/SMB share que não suporta symlinks.
 # O venv fica em $HOME/.venvs para evitar o problema.
@@ -68,6 +68,9 @@ streaming-consumer: install
 
 # Empacota o código do Producer como zip para deploy no Cloud Function (Gen2).
 # Precisa rodar antes de infra-plan/infra-apply quando o código do Producer mudar.
+# O zip vai para /tmp (tmpfs local): o repo pode estar num share CIFS (NAS) que
+# segura travas órfãs e quebra o `rm`/`zip` do build — já aconteceu 2x.
+# O Terraform lê de /tmp/producer.zip (default de infra/variables.tf).
 package-producer:
 	bash infra/scripts/package_producer.sh
 
@@ -98,3 +101,21 @@ infra-apply: package-producer
 # Destrói tudo pós-demo
 infra-destroy:
 	cd infra && terraform destroy
+
+# --- Pipeline completo (um comando só) ---
+
+# Sobe a infra efêmera e roda as camadas na ordem Bronze → Silver → Gold →
+# Quality. Cada passo é um sub-make: se um falhar, o Make para ali e os
+# passos seguintes não rodam (a camada seguinte sempre depende da anterior).
+pipeline: infra-apply
+	$(MAKE) bronze
+	$(MAKE) silver
+	$(MAKE) gold
+	$(MAKE) quality
+
+# Ciclo completo a partir do zero: derruba a infra atual, recria e roda tudo.
+# infra-destroy fica fora de `pipeline` de propósito — destruir não deve ser
+# implícito no comando do dia a dia.
+pipeline-from-scratch:
+	$(MAKE) infra-destroy
+	$(MAKE) pipeline

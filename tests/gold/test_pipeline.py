@@ -43,6 +43,11 @@ class TestRunGold:
                 "uf": uf, "municipio": municipio, "alunos": alunos,
              }[e]), \
              patch("gold.pipeline.silver_reader.read_scd2_table_raw", return_value=None), \
+             patch("gold.pipeline.get_diretorio_uf", return_value={"SP": "São Paulo", "RJ": "Rio de Janeiro", "DF": "Distrito Federal"}), \
+             patch("gold.pipeline.get_diretorio_municipio", return_value={
+                 "3550308": {"nome": "São Paulo", "sigla_uf": "SP", "nome_regiao": "Sudeste", "capital_uf": "1"},
+                 "3304557": {"nome": "Rio de Janeiro", "sigla_uf": "RJ", "nome_regiao": "Sudeste", "capital_uf": "1"},
+             }), \
              patch("gold.pipeline.gcs_lock", new=_mock_lock()), \
              patch("gold.pipeline.log_execution", _mock_log_execution()), \
              _mock_create_view() as mock_create_view, \
@@ -65,12 +70,14 @@ class TestRunGold:
         # da fonte, então são pulados quando a Silver ainda não rodou.
         empty = pa.Table.from_pydict({})
 
-        with patch("gold.pipeline.silver_reader.read_entity", return_value=empty), \
+        with patch("gold.pipeline.get_diretorio_uf", return_value={}), \
+             patch("gold.pipeline.get_diretorio_municipio", return_value={}), \
+             patch("gold.pipeline.silver_reader.read_entity", return_value=empty), \
              patch("gold.pipeline.silver_reader.read_scd2_table_raw", return_value=None), \
              patch("gold.pipeline.gcs_lock", new=_mock_lock()), \
              patch("gold.pipeline.log_execution", _mock_log_execution()), \
              _mock_create_view(), \
-             patch("gold.pipeline.write_table") as mock_write:
+             patch("gold.pipeline.write_table", return_value=0) as mock_write:
             run_gold()
 
         tabelas_escritas = {c.args[0] for c in mock_write.call_args_list}

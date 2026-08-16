@@ -93,7 +93,7 @@ def st_uf_dim_source(draw):
     nomes = {s: draw(st.text(min_size=1, max_size=10)) for s in set(siglas)}
     return pa.table({
         "sigla_uf": siglas,
-        "sigla_uf_nome": [nomes[s] for s in siglas],
+        "nome": [nomes[s] for s in siglas],
     })
 
 
@@ -105,7 +105,23 @@ def test_dim_uf_is_distinct_by_sigla(tabela):
 
 
 @given(st_uf_dim_source())
+def test_dim_uf_keys_match_diretorio(tabela):
+    """Completeness + no extras: chaves da dim == chaves do diretório."""
+    dim = build_dim_uf(tabela)
+    assert set(dim.column("sigla_uf").to_pylist()) == set(tabela.column("sigla_uf").to_pylist())
+    assert dim.num_rows == len(set(tabela.column("sigla_uf").to_pylist()))
+
+
+@given(st_uf_dim_source())
+def test_dim_uf_is_idempotent(tabela):
+    primeira = build_dim_uf(tabela)
+    segunda = build_dim_uf(primeira)
+    assert primeira.to_pylist() == segunda.to_pylist()
+
+
+@given(st_uf_dim_source())
 def test_dim_uf_duplicating_source_rows_keeps_same_cardinality(tabela):
+    """Metamorphic: duplicar linhas no diretório não altera a dim (DISTINCT)."""
     duplicada = pa.concat_tables([tabela, tabela])
     original = build_dim_uf(tabela)
     dobrada = build_dim_uf(duplicada)
@@ -121,15 +137,14 @@ def st_municipio_dim_source(draw):
     ids = draw(st.lists(st.from_regex(r"[0-9]{7}", fullmatch=True), min_size=1, max_size=8, unique=True))
     linhas = []
     for id_mun in ids:
-        n_versoes = draw(st.integers(min_value=1, max_value=3))
-        for _ in range(n_versoes):
+        n_dup = draw(st.integers(min_value=1, max_value=3))
+        for _ in range(n_dup):
             linhas.append({
                 "id_municipio": id_mun,
-                "nome": draw(st.text(min_size=1, max_size=10)),
-                "sigla_uf": draw(st.sampled_from(["SP", "RJ", "MG"])),
-                "nome_regiao": draw(st.sampled_from(["Sudeste", "Sul", "Nordeste"])),
-                "capital_uf": draw(st.integers(min_value=0, max_value=1)),
-                "ano": draw(st.integers(min_value=2020, max_value=2026)),
+                "nome": f"Cidade {id_mun}",
+                "sigla_uf": "SP",
+                "nome_regiao": "Sudeste",
+                "capital_uf": "0",
             })
     return pa.Table.from_pylist(linhas)
 
@@ -139,6 +154,27 @@ def test_dim_municipio_unique_per_id(tabela):
     dim = build_dim_municipio(tabela)
     valores = dim.column("id_municipio").to_pylist()
     assert len(valores) == len(set(valores)) == len(set(tabela.column("id_municipio").to_pylist()))
+
+
+@given(st_municipio_dim_source())
+def test_dim_municipio_keys_match_diretorio(tabela):
+    """Completeness + no extras: chaves da dim == chaves do diretório."""
+    dim = build_dim_municipio(tabela)
+    assert set(dim.column("id_municipio").to_pylist()) == set(tabela.column("id_municipio").to_pylist())
+
+
+@given(st_municipio_dim_source())
+def test_dim_municipio_is_idempotent(tabela):
+    primeira = build_dim_municipio(tabela)
+    segunda = build_dim_municipio(primeira)
+    assert primeira.to_pylist() == segunda.to_pylist()
+
+
+@given(st_municipio_dim_source())
+def test_dim_municipio_duplicating_source_rows_keeps_same_dim(tabela):
+    """Metamorphic: duplicar linhas no diretório não altera a dim (DISTINCT)."""
+    duplicada = pa.concat_tables([tabela, tabela])
+    assert build_dim_municipio(duplicada).to_pylist() == build_dim_municipio(tabela).to_pylist()
 
 
 # --- dim_rede / dim_serie: união distinct entre fontes ---
