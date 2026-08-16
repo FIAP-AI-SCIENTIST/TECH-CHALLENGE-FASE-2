@@ -31,11 +31,25 @@ cat > "$BUILD_DIR/main.py" <<'EOF'
 from streaming.producer import cloud_function_entrypoint as handler
 EOF
 
-cat > "$BUILD_DIR/requirements.txt" <<'EOF'
-pydantic>=2.0
-google-cloud-pubsub
-google-cloud-bigquery
-EOF
+# Versões pinadas ao ambiente local no momento do build — evita que o buildpack do GCP resolva
+# uma versão diferente da testada localmente (achado A7 da revisão de aderência). Cai para o
+# floor solto só se o pacote não estiver instalado localmente (build "a frio", sem venv).
+PYTHON_BIN="${PYTHON:-python3}"
+PIN() {
+  "$PYTHON_BIN" -c "
+import importlib.metadata as m
+try:
+    print(f'$1=={m.version(\"$1\")}')
+except m.PackageNotFoundError:
+    print('$2')
+"
+}
+
+{
+  PIN pydantic "pydantic>=2.0"
+  PIN google-cloud-pubsub "google-cloud-pubsub"
+  PIN google-cloud-bigquery "google-cloud-bigquery"
+} > "$BUILD_DIR/requirements.txt"
 
 echo "Gerando zip em $OUTPUT_ZIP..."
 rm -f "$OUTPUT_ZIP"
