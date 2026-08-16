@@ -48,34 +48,32 @@ def _select_existing(tabela: pa.Table, colunas: list[str]) -> pa.Table:
     return tabela.select(presentes)
 
 
-def build_dim_uf(uf_table: pa.Table) -> pa.Table:
+def build_dim_uf(diretorio_uf: pa.Table) -> pa.Table:
     """Dimensão UF: sigla + nome completo, uma linha por `sigla_uf`
-    (fonte: entidade `uf` da Silver, já enriquecida com o diretório)."""
-    if "sigla_uf" not in uf_table.column_names or "sigla_uf_nome" not in uf_table.column_names:
+    (fonte: diretório oficial `br_bd_diretorios_brasil.uf`, 27 UFs)."""
+    if "sigla_uf" not in diretorio_uf.column_names or "nome" not in diretorio_uf.column_names:
         return pa.table({"sigla_uf": pa.array([], type=pa.string()), "nome": pa.array([], type=pa.string())})
 
     conn = duckdb.connect(":memory:")
-    conn.register("t", uf_table)
-    sql = "SELECT DISTINCT sigla_uf, sigla_uf_nome AS nome FROM t WHERE sigla_uf IS NOT NULL"
+    conn.register("t", diretorio_uf)
+    sql = "SELECT DISTINCT sigla_uf, nome FROM t WHERE sigla_uf IS NOT NULL ORDER BY sigla_uf"
     return conn.sql(sql).to_arrow_table()
 
 
-def build_dim_municipio(municipio_table: pa.Table) -> pa.Table:
-    """Dimensão Município: uma linha por `id_municipio`, mantendo a
-    ocorrência do `ano` mais recente (nome/região raramente mudam, mas
-    quando mudam a versão mais nova prevalece — sem SCD2 aqui, é dimensão
-    de referência territorial, não de meta rastreada)."""
-    colunas = ["id_municipio", "nome", "sigla_uf", "nome_regiao", "capital_uf", "ano"]
-    if "id_municipio" not in municipio_table.column_names:
-        return pa.table({c: pa.array([], type=pa.string()) for c in colunas if c != "ano"})
+def build_dim_municipio(diretorio_municipio: pa.Table) -> pa.Table:
+    """Dimensão Município: uma linha por `id_municipio`
+    (fonte: diretório oficial `br_bd_diretorios_brasil.municipio`,
+    ~5.570 municípios IBGE). Sem `ROW_NUMBER` por ano — o diretório
+    não tem `ano`; é referência territorial atual."""
+    colunas = ["id_municipio", "nome", "sigla_uf", "nome_regiao", "capital_uf"]
+    if "id_municipio" not in diretorio_municipio.column_names:
+        return pa.table({c: pa.array([], type=pa.string()) for c in colunas})
 
     conn = duckdb.connect(":memory:")
-    conn.register("t", _select_existing(municipio_table, colunas))
+    conn.register("t", _select_existing(diretorio_municipio, colunas))
     sql = """
-        SELECT id_municipio, nome, sigla_uf, nome_regiao, capital_uf FROM (
-            SELECT *, ROW_NUMBER() OVER (PARTITION BY id_municipio ORDER BY ano DESC) AS _rn
-            FROM t WHERE id_municipio IS NOT NULL
-        ) WHERE _rn = 1
+        SELECT DISTINCT id_municipio, nome, sigla_uf, nome_regiao, capital_uf
+        FROM t WHERE id_municipio IS NOT NULL ORDER BY id_municipio
     """
     return conn.sql(sql).to_arrow_table()
 
