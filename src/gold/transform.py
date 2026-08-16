@@ -67,7 +67,11 @@ def build_dim_municipio(diretorio_municipio: pa.Table) -> pa.Table:
     não tem `ano`; é referência territorial atual."""
     colunas = ["id_municipio", "nome", "sigla_uf", "nome_regiao", "capital_uf"]
     if "id_municipio" not in diretorio_municipio.column_names:
-        return pa.table({c: pa.array([], type=pa.string()) for c in colunas})
+        vazio = {c: pa.array([], type=pa.string()) for c in colunas}
+        # `capital_uf` é INT64 na fonte — o fallback vazio precisa do mesmo tipo,
+        # senão a tabela criada num run sem diretório conflita com o do run seguinte.
+        vazio["capital_uf"] = pa.array([], type=pa.int64())
+        return pa.table(vazio)
 
     conn = duckdb.connect(":memory:")
     conn.register("t", _select_existing(diretorio_municipio, colunas))

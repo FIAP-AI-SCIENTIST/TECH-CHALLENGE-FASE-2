@@ -46,8 +46,8 @@ class TestRunGold:
              patch("gold.pipeline.get_diretorio_uf", return_value=(
                  {"SP": "São Paulo", "RJ": "Rio de Janeiro", "DF": "Distrito Federal"}, 1024)), \
              patch("gold.pipeline.get_diretorio_municipio", return_value=({
-                 "3550308": {"nome": "São Paulo", "sigla_uf": "SP", "nome_regiao": "Sudeste", "capital_uf": "1"},
-                 "3304557": {"nome": "Rio de Janeiro", "sigla_uf": "RJ", "nome_regiao": "Sudeste", "capital_uf": "1"},
+                 "3550308": {"nome": "São Paulo", "sigla_uf": "SP", "nome_regiao": "Sudeste", "capital_uf": 1},
+                 "3304557": {"nome": "Rio de Janeiro", "sigla_uf": "RJ", "nome_regiao": "Sudeste", "capital_uf": 1},
              }, 2048)), \
              patch("gold.pipeline.gcs_lock", new=_mock_lock()), \
              patch("gold.pipeline.log_execution", _mock_log_execution()), \
@@ -124,9 +124,13 @@ class TestRunGold:
             {"sigla": "DF", "nome": "Distrito Federal"},
             {"sigla": "RR", "nome": "Roraima"},
         ]
+        # `capital_uf` é INT64 no diretório da Base dos Dados — fixture com string
+        # aqui esconderia o ArrowTypeError que estourou no run real.
         municipio_rows = [
             {"id_municipio": "5219308", "nome": "Santa Helena de Goiás",
-             "sigla_uf": "GO", "nome_regiao": "Centro-Oeste", "capital_uf": "0"},
+             "sigla_uf": "GO", "nome_regiao": "Centro-Oeste", "capital_uf": 0},
+            {"id_municipio": "5208707", "nome": "Goiânia",
+             "sigla_uf": "GO", "nome_regiao": "Centro-Oeste", "capital_uf": 1},
         ]
 
         def do_query(_client, sql):
@@ -146,5 +150,7 @@ class TestRunGold:
         # F1: DF e RR presentes na dim mesmo sem linha de resultado na Silver.
         assert set(escritas["dim_uf"].column("sigla_uf").to_pylist()) == {"SP", "DF", "RR"}
         # F2: município que a entidade `municipio` do INEP omite.
-        assert escritas["dim_municipio"].column("id_municipio").to_pylist() == ["5219308"]
+        assert escritas["dim_municipio"].column("id_municipio").to_pylist() == ["5208707", "5219308"]
+        # Tipo preservado da fonte: forçar string quebra o load da dim.
+        assert escritas["dim_municipio"].schema.field("capital_uf").type == pa.int64()
 
