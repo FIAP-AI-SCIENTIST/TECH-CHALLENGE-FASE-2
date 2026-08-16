@@ -15,6 +15,7 @@ import pyarrow as pa
 from bronze import reader as bronze_reader
 
 from . import gold_reader, rules
+from observability.logging import setup_logger
 from .checks import check_data_freshness, check_reconciliation, check_referential_integrity, check_row_count
 from .suites import validate_dataframe
 from .translate import QualityResult, translate_validation
@@ -128,6 +129,29 @@ def _fk_check_results() -> list[QualityResult]:
     return results
 
 
+def _log_fim_execucao(all_results: list[QualityResult]) -> None:
+    """Mensagem final de `make quality` no mesmo formato JSON das demais camadas
+    (`observability.logging`) — o run termina com evidência, não com exceção,
+    então o status reflete as falhas CRITICA encontradas, não a saúde do processo.
+    """
+    falhas = [r for r in all_results if not r.passou]
+    criticas = [r for r in falhas if r.severidade == "CRITICA"]
+    log = setup_logger()
+    if criticas:
+        log.error(
+            "Fim da execução — SUCCESS_WITH_DQ_FAILURE: "
+            f"{len(criticas)} falha(s) CRITICA em {', '.join(sorted({r.entidade for r in criticas}))} "
+            "— ver data_quality_log.",
+            extra={"unit": "Quality", "layer": "Quality", "status": "SUCCESS_WITH_DQ_FAILURE"},
+        )
+        return
+    log.info(
+        f"Fim da execução — sucesso: {len(all_results)} checks, {len(falhas)} falha(s) não-CRITICA "
+        "— ver data_quality_log.",
+        extra={"unit": "Quality", "layer": "Quality", "status": "SUCCESS"},
+    )
+
+
 def run_all_quality_checks(frames: Mapping[str, pd.DataFrame] | None = None, *, writer=write_results) -> list[QualityResult]:
     """Entry point (`make quality`). Com `frames` injetados, valida direto
     (testes); sem argumento, lê o estado atual da Silver para as 6 entidades
@@ -171,4 +195,5 @@ def run_all_quality_checks(frames: Mapping[str, pd.DataFrame] | None = None, *, 
         logger.exception("quality evidence write failed")
 
     all_results.extend(extra_results)
+    _log_fim_execucao(all_results)
     return all_results
