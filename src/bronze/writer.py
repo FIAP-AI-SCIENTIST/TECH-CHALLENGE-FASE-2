@@ -40,9 +40,12 @@ def write_partition(entidade: str, chave: str, table: pa.Table, part_id: str) ->
     settings = get_settings()
     bucket = client.bucket(settings.bucket_name)
 
-    # Serializa para Parquet
+    # Serializa para Parquet. O codec é declarado em vez de herdado do default
+    # da biblioteca: a compressão é uma decisão de custo de armazenamento e de
+    # bytes lidos por consulta, então não deve depender de um default que pode
+    # mudar entre versões do pyarrow.
     buffer = io.BytesIO()
-    pq.write_table(table, buffer)
+    pq.write_table(table, buffer, compression="snappy")
     buffer.seek(0)
 
     # Upload

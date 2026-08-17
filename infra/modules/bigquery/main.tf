@@ -1,12 +1,16 @@
-# O Dataset que abriga as tabelas analíticas (Camada Gold materializada por dbt)
-# e as tabelas operacionais como a de Auditoria de pipeline.
+# O Dataset que abriga as tabelas do modelo dimensional (camada Gold, criadas
+# pelo próprio pipeline via DDL) e as tabelas operacionais de auditoria de
+# execução e de qualidade de dados.
 resource "google_bigquery_dataset" "analytics" {
   dataset_id = "alfabetizacao_analytics"
   project    = var.project_id
   location   = var.location # CRÍTICO: DEVE ser "US" para co-localização com basedosdados
 
-  # CRÍTICO: sem isso, `terraform destroy` falhará se houverem tabelas criadas no dataset
-  # (ex: tabelas do dbt da camada Gold). Garante a efemeridade do projeto.
+  labels = var.labels
+
+  # CRÍTICO: sem isso, `terraform destroy` falhará se houverem tabelas criadas no
+  # dataset (as dimensões, fatos e views da Gold são criadas em tempo de execução,
+  # fora do Terraform). Garante a efemeridade do projeto.
   delete_contents_on_destroy = true
 }
 
@@ -22,7 +26,16 @@ resource "google_bigquery_table" "audit_log" {
   # diferentes. Sem isso, `terraform destroy` falha nesta tabela (e por
   # dependência, no dataset que a contém), quebrando a efemeridade do projeto.
   deletion_protection = false
-  schema              = <<EOF
+  labels              = var.labels
+
+  # Sem particionamento por data de propósito: o BigQuery não adiciona partição a
+  # uma tabela já existente, então declarar `time_partitioning` aqui faria o
+  # Terraform recriar a tabela e apagar todo o histórico de execuções acumulado —
+  # que é justamente a evidência de que o pipeline rodou. A mudança só é segura
+  # junto de um ciclo completo de recriação da infraestrutura, não de forma
+  # incremental. Enquanto isso, o volume é de uma linha por etapa por execução:
+  # dezenas de linhas por rodada, longe de qualquer limiar de custo.
+  schema = <<EOF
 [
   {"name": "run_id", "type": "STRING", "mode": "REQUIRED", "description": "Identificador único da execução"},
   {"name": "step", "type": "STRING", "mode": "REQUIRED", "description": "Qual etapa rodou (ex: Bronze_Ingestion)"},
@@ -43,7 +56,10 @@ resource "google_bigquery_table" "data_quality_log" {
   table_id            = "data_quality_log"
   project             = var.project_id
   deletion_protection = false
-  schema              = <<EOF
+  labels              = var.labels
+
+  # Mesma razão da tabela de auditoria para não declarar partição aqui.
+  schema = <<EOF
 [
   {"name":"check_id","type":"STRING","mode":"REQUIRED"},
   {"name":"check","type":"STRING","mode":"REQUIRED"},
