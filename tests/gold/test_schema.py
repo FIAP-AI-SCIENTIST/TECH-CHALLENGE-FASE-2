@@ -1,10 +1,12 @@
 """Testes do módulo gold.schema — DDL declarativo de partição/clustering/constraints."""
 
+import re
+from collections import Counter
 from unittest.mock import MagicMock, patch
 
 from config import get_settings
 from gold import schema as gold_schema
-from gold.schema import TABLE_DDL, ensure_table, run_ddl
+from gold.schema import FACT_FKS, TABLE_DDL, ensure_constraints, ensure_table, run_ddl
 
 DIMS = [
     "dim_uf",
@@ -108,6 +110,21 @@ class TestTableDdl:
         for coluna in ("ano INT64", "decada INT64", "ano_tem_meta BOOL", "anos_para_meta_final INT64"):
             assert coluna in ddl
 
+    def test_no_ddl_has_duplicate_columns(self):
+        """Coluna duplicada faz o CREATE falhar com erro de sintaxe — e o DDL
+        nunca é executado em teste, então só uma checagem estrutural pega."""
+        for nome, ddl in TABLE_DDL.items():
+            colunas = re.findall(r"^\s{2}([a-z_0-9]+)\s+(?:INT64|STRING|FLOAT64|BOOL)", ddl, re.MULTILINE)
+            duplicadas = [c for c, n in Counter(colunas).items() if n > 1]
+            assert not duplicadas, f"{nome}: colunas duplicadas {duplicadas}"
+
+    def test_fact_fks_registry_covers_exactly_fact_tables(self):
+        """FACT_FKS e TABLE_DDL precisam cobrir os mesmos fatos — um fato em
+        TABLE_DDL sem entrada em FACT_FKS seria criado com FK no DDL mas nunca
+        re-aplicado por ensure_constraints após o load."""
+        fatos_no_ddl = {t for t in TABLE_DDL if t.startswith("fact_")}
+        assert set(FACT_FKS) == fatos_no_ddl
+
 
 class TestEnsureTable:
     def test_runs_ddl_for_registry_table(self):
@@ -118,18 +135,81 @@ class TestEnsureTable:
         assert client.query.call_args.args[0] == TABLE_DDL["fact_indicador_uf"]
 
     def test_runs_ddl_for_dim(self):
-        """Dims entraram no registry (PK declarada) — deixaram de ser criadas
-        só pelo load job, porque a FK dos fatos exige a dim existente com PK."""
+        """CREATE IF NOT EXISTS é no-op para dim existente e cria a nova com o
+        DDL completo (com PK) — sem consulta prévia de existência."""
         with patch("gold.schema.bigquery.Client"):
             client = MagicMock()
             ensure_table(client, "dim_uf")
         client.query.assert_called_once()
         assert client.query.call_args.args[0] == TABLE_DDL["dim_uf"]
+        client.get_table.assert_not_called()
 
     def test_noop_for_table_outside_registry(self):
         client = MagicMock()
         ensure_table(client, "data_quality_log")
         client.query.assert_not_called()
+
+
+class TestEnsureConstraints:
+    """O load job WRITE_TRUNCATE remove PK/FK a cada escrita — constraints são
+    re-aplicadas DEPOIS do load, via ALTER TABLE."""
+
+    def test_dim_without_pk_gets_alter(self):
+        """Dim sem PK (load acabou de derrubar, ou criada antes das constraints)
+        recebe a PK via ALTER TABLE — senão os fatos falham ao declarar FK."""
+        client = MagicMock()
+        client.get_table.return_value = MagicMock(table_constraints=None)
+        ensure_constraints(client, "dim_uf")
+        client.query.assert_called_once()
+        sql = client.query.call_args.args[0]
+        assert sql.startswith("ALTER TABLE")
+        assert "ADD PRIMARY KEY (sk_uf) NOT ENFORCED" in sql
+
+    def test_noop_for_dim_that_already_has_pk(self):
+        """Dim já com PK não é tocada — idempotente."""
+        client = MagicMock()
+        pk = MagicMock()
+        client.get_table.return_value = MagicMock(
+            table_constraints=MagicMock(primary_key=pk)
+        )
+        ensure_constraints(client, "dim_uf")
+        client.query.assert_not_called()
+
+    def test_fact_without_fks_gets_all_alters(self):
+        """Fato sem nenhuma FK (load derrubou todas) re-declara cada FK do registry."""
+        client = MagicMock()
+        client.get_table.return_value = MagicMock(table_constraints=None)
+        ensure_constraints(client, "fact_meta_resultado_uf")
+        assert client.query.call_count == 3
+        sqls = [c.args[0] for c in client.query.call_args_list]
+        for coluna, dim in FKS_POR_FATO["fact_meta_resultado_uf"]:
+            esperado = (
+                f"ADD FOREIGN KEY ({coluna}) REFERENCES "
+                f"`{get_settings().project_id}.{get_settings().dataset_id}.{dim}`({coluna}) NOT ENFORCED"
+            )
+            assert any(esperado in sql for sql in sqls), coluna
+
+    def test_fact_skips_fks_already_present(self):
+        """FKs já presentes não são re-declaradas — só as ausentes."""
+        fk_existente = MagicMock()
+        fk_existente.referenced_table.table_id = "dim_uf"
+        ref = MagicMock()
+        ref.referencing_column = "sk_uf"
+        fk_existente.column_references = [ref]
+        constraints = MagicMock(foreign_keys=[fk_existente])
+
+        client = MagicMock()
+        client.get_table.return_value = MagicMock(table_constraints=constraints)
+        ensure_constraints(client, "fact_meta_resultado_uf")
+        assert client.query.call_count == 2
+        sqls = [c.args[0] for c in client.query.call_args_list]
+        assert all("FOREIGN KEY (sk_uf)" not in sql for sql in sqls)
+
+    def test_noop_for_table_outside_registry(self):
+        client = MagicMock()
+        ensure_constraints(client, "data_quality_log")
+        client.query.assert_not_called()
+        client.get_table.assert_not_called()
 
 
 class TestRunDdl:
