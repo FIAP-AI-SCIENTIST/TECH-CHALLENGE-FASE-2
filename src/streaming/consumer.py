@@ -5,6 +5,7 @@ import time  # pyright: ignore[reportUnusedImport] - necessario para with_retry 
 from collections import defaultdict
 from datetime import date
 
+import pyarrow as pa
 from google.cloud import pubsub_v1
 
 from bronze import writer as bronze_writer
@@ -101,14 +102,26 @@ def consume_batch(max_messages: int = 10) -> None:
                 )
                 continue
 
-            grupos[entidade].append((instancia, modelo, msg.ack_id))
+            # publish_time é o event time: quando o evento entrou no Pub/Sub.
+            # Gravado junto para permitir medir o lag ponta a ponta do streaming
+            # (data_ingestao da partição - data_evento da linha).
+            grupos[entidade].append((instancia, modelo, msg.ack_id, msg.message.publish_time))
 
         rows_written = 0
         for entidade, itens in grupos.items():
-            instancias = [i for i, _m, _a in itens]
+            instancias = [i for i, _m, _a, _p in itens]
             modelo = itens[0][1]
             schema = to_pyarrow_schema(modelo)
             table = to_pyarrow_table(instancias, schema)
+            # data_evento fica fora dos contratos Pydantic de propósito: ela só
+            # existe no streaming (a extração batch não tem event time), e as
+            # partições data_ingestao= da Bronze não são lidas pela Silver —
+            # colocar o campo no modelo compartilhado propagaria uma coluna
+            # toda nula para as camadas de batch.
+            table = table.append_column(
+                pa.field("data_evento", pa.timestamp("us", tz="UTC"), nullable=False),
+                pa.array([publish_time for _i, _m, _a, publish_time in itens], type=pa.timestamp("us", tz="UTC")),
+            )
 
             try:
                 # Nunca limpa a partição: "data_ingestao=<hoje>" é compartilhada
@@ -117,7 +130,7 @@ def consume_batch(max_messages: int = 10) -> None:
                 # e a Bronze mantém o histórico completo do dia.
                 written = bronze_writer.write_partition(entidade, chave, table, part_id=run.run_id)
                 rows_written += written
-                ack_ids_ok.extend(ack_id for _i, _m, ack_id in itens)
+                ack_ids_ok.extend(ack_id for _i, _m, ack_id, _p in itens)
             except Exception as exc:
                 logger.error(
                     f"Falha ao escrever partição da Bronze: {type(exc).__name__}: {exc}",
