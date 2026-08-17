@@ -11,6 +11,7 @@ import pytest
 from config import get_settings
 from gold import marts
 from gold.marts import MART_QUERIES, create_view, render_view_ddl
+from gold.transform import surrogate_key
 
 
 def _run(query_nome: str, tabelas: dict[str, pa.Table]) -> list[dict]:
@@ -91,16 +92,20 @@ class TestMartAderenciaMetasUf:
 
 @pytest.fixture()
 def tabelas_ranking() -> dict[str, pa.Table]:
+    """Fato e dim ligados pela surrogate key — o JOIN da mart é físico (sk),
+    e a chave natural `id_municipio` sai da dimensão."""
+    ids = ["3550308", "3304557", "3509502", "3550309"]
     fact = pa.table({
         "ano": [2023, 2023, 2023, 2023],
-        "id_municipio": ["3550308", "3304557", "3509502", "3550309"],
+        "sk_municipio": [surrogate_key("municipio", i) for i in ids],
         "serie": ["1", "1", "1", "1"],
         "rede": ["1", "1", "1", "1"],
         "taxa_alfabetizacao": [90.0, 85.0, 90.0, 70.0],
         "media_portugues": [600.0, 590.0, 610.0, 500.0],
     })
     dim = pa.table({
-        "id_municipio": ["3550308", "3304557", "3509502", "3550309"],
+        "sk_municipio": [surrogate_key("municipio", i) for i in ids],
+        "id_municipio": ids,
         "nome": ["São Paulo", "Rio de Janeiro", "Campinas", "Mauá"],
         "sigla_uf": ["SP", "RJ", "SP", "SP"],
         "nome_regiao": ["Sudeste", "Sudeste", "Sudeste", "Sudeste"],
@@ -131,7 +136,8 @@ class TestMartRankingIndicadorMunicipio:
         tabelas = dict(tabelas_ranking)
         fato = tabelas["fact_indicador_municipio"]
         extra = pa.table({
-            "ano": [2023], "id_municipio": ["9999999"], "serie": ["1"], "rede": ["1"],
+            "ano": [2023], "sk_municipio": [surrogate_key("municipio", "9999999")],
+            "serie": ["1"], "rede": ["1"],
             "taxa_alfabetizacao": [99.0], "media_portugues": [700.0],
         })
         tabelas["fact_indicador_municipio"] = pa.concat_tables([fato, extra])

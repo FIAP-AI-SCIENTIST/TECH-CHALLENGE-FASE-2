@@ -41,13 +41,15 @@ COLUMN_PATTERNS = {
     "uf": {"sigla_uf": r"^[A-Z]{2}$"}, "meta_alfabetizacao_uf": {"sigla_uf": r"^[A-Z]{2}$"},
 }
 SEVERIDADE = {"duplicidade": "CRITICA", "chave_relacionamento": "CRITICA", "schema": "CRITICA", "formato_coluna": "CRITICA"}
-# Pares fato x coluna x dimensao x coluna_dim verificados por check_referential_integrity.
-# So sigla_uf->dim_uf e id_municipio->dim_municipio: rede/serie sao tautologicas (dim_rede/dim_serie
-# sao a uniao dos proprios codigos dos fatos, gold.transform._build_dim_codigo) e nao entram aqui.
+# Pares fato x coluna x dimensao x coluna_dim verificados por check_referential_integrity,
+# sobre as surrogate keys declaradas como FK no DDL da Gold. So as FKs territoriais:
+# sk_rede/sk_serie/sk_tempo sao tautologicas (dim_rede/dim_serie sao a uniao dos proprios
+# codigos dos fatos e dim_tempo cobre os anos observados por construcao) e nao entram aqui.
 FK_PAIRS: list[tuple[str, str, str, str]] = [
-    ("fact_indicador_uf", "sigla_uf", "dim_uf", "sigla_uf"),
-    ("fact_meta_resultado_uf", "sigla_uf", "dim_uf", "sigla_uf"),
-    ("fact_indicador_municipio", "id_municipio", "dim_municipio", "id_municipio"),
-    ("fact_meta_resultado_municipio", "id_municipio", "dim_municipio", "id_municipio"),
-    ("fact_alunos", "id_municipio", "dim_municipio", "id_municipio"),
+    ("fact_indicador_uf", "sk_uf", "dim_uf", "sk_uf"),
+    ("fact_meta_resultado_uf", "sk_uf", "dim_uf", "sk_uf"),
+    ("fact_indicador_municipio", "sk_municipio", "dim_municipio", "sk_municipio"),
+    ("fact_meta_resultado_municipio", "sk_municipio", "dim_municipio", "sk_municipio"),
+    ("fact_alfabetizacao_municipio", "sk_municipio", "dim_municipio", "sk_municipio"),
+    ("fact_alunos", "sk_municipio", "dim_municipio", "sk_municipio"),
 ]
