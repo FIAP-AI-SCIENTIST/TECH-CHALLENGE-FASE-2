@@ -17,11 +17,12 @@ mkdir -p "$(dirname "$OUTPUT_ZIP")"
 echo "Montando diretório de build em $BUILD_DIR..."
 
 # Copia só os pacotes que o Producer realmente importa (streaming, contracts,
-# common, observability) — não o monorepo inteiro.
+# common, observability) e a configuração necessária para o runtime.
 cp -r "$REPO_ROOT/src/streaming" "$BUILD_DIR/"
 cp -r "$REPO_ROOT/src/contracts" "$BUILD_DIR/"
 cp -r "$REPO_ROOT/src/common" "$BUILD_DIR/"
 cp -r "$REPO_ROOT/src/observability" "$BUILD_DIR/"
+cp "$REPO_ROOT/src/config.py" "$BUILD_DIR/"
 
 # Remove __pycache__ copiados por engano
 find "$BUILD_DIR" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
@@ -46,7 +47,9 @@ except m.PackageNotFoundError:
 }
 
 {
+  PIN functions-framework "functions-framework>=3.0"
   PIN pydantic "pydantic>=2.0"
+  PIN pydantic-settings "pydantic-settings>=2.0"
   PIN google-cloud-pubsub "google-cloud-pubsub"
   PIN google-cloud-bigquery "google-cloud-bigquery"
 } > "$BUILD_DIR/requirements.txt"
