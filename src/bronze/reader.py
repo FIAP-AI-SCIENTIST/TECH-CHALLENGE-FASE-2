@@ -65,6 +65,16 @@ def read_partition(entidade: str, chave: str | None = None) -> pa.Table:
 
     Se ``chave`` for informada (ex: "ano=2023"), lê só os Parquets daquela
     partição. Senão, lê e concatena todas as partições da entidade.
+
+    A concatenação **promove schemas** (``promote_options="default"``) porque as
+    partições de uma mesma entidade podem vir de origens diferentes e não têm
+    obrigação de coincidir coluna a coluna: o batch escreve `ano=` a partir do
+    contrato Pydantic, e o streaming escreve `data_ingestao=` com o mesmo
+    contrato **mais** o event time do Pub/Sub (`data_evento`). Coluna presente
+    em parte dos arquivos vira nula nas linhas que não a têm, em vez de derrubar
+    a leitura inteira — sem isso, ler uma entidade que recebeu ingestão pelos
+    dois caminhos falha com `ArrowInvalid: Schema mismatch`. Mesmo comportamento
+    já adotado por `silver.reader.read_entity` e pela Gold.
     """
     client = storage.Client()
     settings = get_settings()
@@ -88,7 +98,7 @@ def read_partition(entidade: str, chave: str | None = None) -> pa.Table:
 
     if not tables:
         return pa.Table.from_pydict({})
-    return pa.concat_tables(tables)
+    return pa.concat_tables(tables, promote_options="default")
 
 
 def count_partition_rows(entidade: str) -> int:
