@@ -26,7 +26,7 @@ Arquitetura Lambda (camada batch + camada streaming convergindo na mesma camada 
 
 | Camada | Tecnologia | Justificativa |
 |---|---|---|
-| Extração/Streaming | Python + `google-cloud-bigquery`/`google-cloud-pubsub` | Sem Spark/Airflow self-hosted — volume da fonte (~4M linhas na maior entidade) não justifica cluster distribuído; Python simples cobre o caso |
+| Extração/Streaming | Python + `google-cloud-bigquery`/`google-cloud-pubsub` | Sem Spark/Airflow self-hosted — volume da fonte (~4M linhas na maior entidade) não justifica cluster distribuído (ver "Spark fora do desenho" nos trade-offs abaixo); Python single-node cobre o caso |
 | Formato de dados | Parquet particionado (hive-style) | Colunar, compressão eficiente, leitura seletiva por partição — custo de storage e de query menor |
 | Streaming transporte | Pub/Sub (não Kafka) | Ver seção de trade-offs abaixo |
 | Contratos de dados | Pydantic | Único schema por entidade compartilhado entre extração batch, producer e consumer streaming — evita drift de schema entre os dois caminhos que convergem na Bronze |
@@ -39,6 +39,8 @@ Arquitetura Lambda (camada batch + camada streaming convergindo na mesma camada 
 **Cloud única (GCP), não multi-cloud.** A fonte de dados (Base dos Dados/INEP) mora nativamente no BigQuery — não existe equivalente na AWS/Azure. Mesmo com uma camada de abstração multi-cloud, a extração continuaria presa ao GCP; portabilizar o resto seria engenharia sem retorno. Tirar os dados do BigQuery público para processar em outra nuvem geraria custo real de egress, o que colide direto com o orçamento free-tier do projeto. Terraform também não abstrai providers de forma nativa — "agnóstico" significaria manter 2-3 implementações paralelas por módulo, triplicando a superfície de bugs para um requisito que o desafio não pede (pede escolha justificada, não portabilidade).
 
 **Pub/Sub em vez de Kafka.** O padrão publish/subscribe (tópico → subscription/consumer group, semântica at-least-once, monitoramento de lag) é o mesmo, mas Kafka self-hosted (ou mesmo um serviço gerenciado como Confluent Cloud/MSK) não tem free tier real, e o projeto já está comprometido com um único provedor gerenciado (GCP). Pub/Sub cobre publish/subscribe, consumer lag e entrega at-least-once dentro do orçamento zero.
+
+**Spark fora do desenho (processamento single-node de propósito).** O volume da fonte não paga um engine distribuído: a maior entidade tem ~4M de linhas e as demais ficam na casa das dezenas de milhares — carga que uma única máquina processa em segundos. Nessa escala o gargalo é I/O de rede com a fonte, não CPU paralela, e Spark não remove I/O. O processamento pesado já está delegado aos engines certos para o tamanho do problema: o scan e as agregações sobre a fonte rodam dentro do próprio BigQuery (que é um engine distribuído — só que gerenciado e dentro do free tier), e as transformações set-based da Silver/Gold rodam em DuckDB no mesmo processo Python, sem cluster para provisionar. O que se evita é concreto: Dataproc não tem free tier (cluster faturado po…
 
 **Sem camada de staging antes da Bronze.** Como a fonte já é uma tabela estruturada e confiável do BigQuery público (não um arquivo solto ou API instável), a extração aplica o contrato Pydantic direto na leitura e grava já na Bronze — uma camada de staging intermediária existiria só para reformatar algo que já chega formatado.
 
@@ -53,7 +55,7 @@ Isso preserva o histórico da Bronze sem depender de transações, ao custo de n
 
 **Gold materializada via load job direto no BigQuery, não dbt.** O comentário original do Terraform previa dbt para a Gold (`main.tf` do módulo BigQuery), mas o projeto não tem — nem precisa de — um projeto dbt para 10 tabelas pequenas: introduzir `profiles.yml`, modelos SQL e o runner do dbt só para recriar o que o Python já faz (DuckDB para o SQL set-based, PyArrow para o schema) duplicaria ferramenta para o mesmo resultado. Cada dimensão/fato é uma função pura testável em `gold.transform` (mesmo padrão de `silver.transform`); a escrita usa `load_table_from_file` com `WRITE_TRUNCATE` e schema inferido do próprio Parquet — sem exigir DDL prévio no Terraform, sem staging, sem camada extra de orquestração SQL.
 
-**Comparação meta x resultado usa o próprio ano da versão SCD2, não um join com os fatos de indicador.** As tabelas de meta já carregam, na mesma linha, o resultado observado (`taxa_alfabetizacao`) e a trajetória de metas futuras (`meta_alfabetizacao_2024..2030`) — comparar contra o alvo do próprio ano da linha evita um join client-side com granularidade diferente (indicador é por `serie`, meta não). Para que essa comparação tenha uma linha por ano, o SCD2 rastreia o **resultado observado** junto com a trajetória de metas e a participação: dois anos consecutivos só colapsam numa versão única se as três coisas forem idênticas. Rastrear apenas a trajetória faria o ano cujo alvo repetisse o anterior herdar a linha antiga inteira, levando consigo a taxa de alfabetização defasada — ou seja, o fato perderia justamente o número que existe para comparar.
+**Comparação meta x resultado usa o próprio ano da versão SCD2, não um join com os fatos de indicador.** As tabelas de meta já carregam, na mesma linha, o resultado observado (`taxa_alfabetizacao`) e a trajetória de metas futuras (`meta_alfabetizacao_2024..2030`) — comparar contra o alvo do próprio ano da linha evita um join client-side com granularidade diferente (indicador é por `serie`, meta não). Para que essa comparação tenha uma linha por ano, o SCD2 rastreia o **resultado observado** junto com a trajetória de metas e a participação: dois anos consecutivos só colapsam numa versão única se as três coisas forem idênticas. Rastrear apenas a trajetória faria o ano cujo alvo repetisse o anterior herdar a linha antiga inteira, levando consigo a taxa de alfab…
 
 ## FinOps
 
@@ -182,3 +184,7 @@ Os modelos em si não estão implementados neste MVP — a Gold dimensional (dim
 ## Evidências de execução
 
 WIP
+
+[Some lines truncated to 768 chars]
+
+[Some lines truncated to 768 chars]
