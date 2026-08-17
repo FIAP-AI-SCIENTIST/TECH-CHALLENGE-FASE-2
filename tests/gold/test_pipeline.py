@@ -38,9 +38,16 @@ class TestRunGold:
             "capital_uf": [1], "taxa_alfabetizacao": [80.0],
         })
         alunos = pa.table({"ano": [2023], "id_municipio": ["3550308"], "id_aluno": ["a1"], "proficiencia": [650.0]})
+        integrada = pa.table({
+            "ano": [2024], "id_municipio": ["3550308"], "rede": ["1"], "serie": ["2"],
+            "taxa_alfabetizacao": [80.0], "media_portugues": [700.0],
+            "meta_indicador": [75.0], "percentual_participacao": [95.0],
+            "nivel_alfabetizacao": pa.array([2], type=pa.int64()),
+        })
 
         with patch("gold.pipeline.silver_reader.read_entity", side_effect=lambda e: {
                 "uf": uf, "municipio": municipio, "alunos": alunos,
+                "alfabetizacao_municipio_integrado": integrada,
              }[e]), \
              patch("gold.pipeline.silver_reader.read_scd2_table_raw", return_value=None), \
              patch("gold.pipeline.get_diretorio_uf", return_value=(
@@ -57,9 +64,20 @@ class TestRunGold:
 
         tabelas_escritas = {c.args[0] for c in mock_write.call_args_list}
         assert tabelas_escritas == {
-            "dim_uf", "dim_municipio", "dim_rede", "dim_serie",
+            "dim_uf", "dim_municipio", "dim_rede", "dim_serie", "dim_tempo",
             "fact_indicador_uf", "fact_indicador_municipio", "fact_alunos",
+            "fact_alfabetizacao_municipio",
         }
+        # O fato integrado carrega meta e resultado da mesma linha, com FKs.
+        fato_integrado = next(c.args[1] for c in mock_write.call_args_list if c.args[0] == "fact_alfabetizacao_municipio")
+        row = fato_integrado.to_pylist()[0]
+        assert row["meta_indicador"] == 75.0
+        assert row["gap_pontos"] == 5.0
+        assert row["sk_municipio"] is not None and row["sk_tempo"] is not None
+        # dim_tempo cobre os anos observados e o horizonte da meta.
+        dim_tempo = next(c.args[1] for c in mock_write.call_args_list if c.args[0] == "dim_tempo")
+        anos_dim = set(dim_tempo.column("ano").to_pylist())
+        assert {2023, 2024} <= anos_dim and set(range(2024, 2031)) <= anos_dim
         # As 3 views analíticas são criadas após os fatos.
         views_criadas = [c.args[0] for c in mock_create_view.call_args_list]
         assert views_criadas == [
@@ -69,6 +87,8 @@ class TestRunGold:
     def test_skips_facts_when_silver_not_processed_yet(self):
         # Dims sempre saem (fallback com schema vazio); fatos exigem colunas
         # da fonte, então são pulados quando a Silver ainda não rodou.
+        # dim_tempo é a exceção intencional: mesmo sem ano observado, o
+        # horizonte da meta nacional (2024-2030) sempre existe na dimensão.
         empty = pa.Table.from_pydict({})
 
         with patch("gold.pipeline.get_diretorio_uf", return_value=({}, 0)), \
@@ -82,7 +102,7 @@ class TestRunGold:
             run_gold()
 
         tabelas_escritas = {c.args[0] for c in mock_write.call_args_list}
-        assert tabelas_escritas == {"dim_uf", "dim_municipio", "dim_rede", "dim_serie"}
+        assert tabelas_escritas == {"dim_uf", "dim_municipio", "dim_rede", "dim_serie", "dim_tempo"}
 
     def test_view_failure_is_isolated_and_marks_run_failed(self):
         """Uma view falhando não impede as demais, mas o

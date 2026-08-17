@@ -40,20 +40,22 @@ FROM {prefix}fact_meta_resultado_uf
 """,
     # Grão (ano, id_municipio): agrega série/rede antes de rankear, enriquece com
     # dim_municipio e rankeia dentro da UF (RANK — empates dividem posição).
+    # O JOIN físico é pela surrogate key (FK declarada); a chave natural
+    # `id_municipio` sai da dimensão como atributo consultável.
     "mart_ranking_indicador_municipio": """WITH por_municipio_ano AS (
-    SELECT f.ano, f.id_municipio,
+    SELECT f.ano, f.sk_municipio,
            AVG(f.taxa_alfabetizacao) AS taxa_media_alfabetizacao,
            AVG(f.media_portugues)    AS media_portugues_media
     FROM {prefix}fact_indicador_municipio f
-    GROUP BY f.ano, f.id_municipio
+    GROUP BY f.ano, f.sk_municipio
 )
-SELECT p.ano, p.id_municipio,
+SELECT p.ano, d.id_municipio,
        d.nome AS nome_municipio, d.sigla_uf, d.nome_regiao, d.capital_uf,
        p.taxa_media_alfabetizacao, p.media_portugues_media,
        RANK() OVER (PARTITION BY p.ano, d.sigla_uf
                     ORDER BY p.taxa_media_alfabetizacao DESC) AS rank_uf
 FROM por_municipio_ano p
-JOIN {prefix}dim_municipio d ON p.id_municipio = d.id_municipio
+JOIN {prefix}dim_municipio d ON p.sk_municipio = d.sk_municipio
 """,
 }
 

@@ -15,7 +15,7 @@ from gold.writer import write_table
 from observability.logging import log_execution, setup_logger
 from silver import reader as silver_reader
 from silver.reference import get_diretorio_municipio, get_diretorio_uf
-from silver.transform import normalize_key
+from silver.transform import ENTIDADE_INTEGRADA, normalize_key
 
 ENTIDADES_META = ("meta_alfabetizacao_brasil", "meta_alfabetizacao_uf", "meta_alfabetizacao_municipio")
 
@@ -81,12 +81,23 @@ def _diretorio_municipio_to_arrow(diretorio: dict[str, dict]) -> pa.Table:
     })
 
 
+def _coletar_anos(*tabelas: pa.Table) -> list[int]:
+    """União dos valores de `ano` das tabelas Silver lidas — cobertura da
+    `dim_tempo`, que precisa conter todo ano referenciado por qualquer fato."""
+    anos: list[int] = []
+    for tabela in tabelas:
+        if "ano" in tabela.column_names:
+            anos.extend(tabela.column("ano").to_pylist())
+    return anos
+
+
 def run_gold() -> None:
     """Materializa todas as dimensões e fatos da Gold a partir da Silver.
 
     Isolamento de falha por tabela (mesmo padrão de
     `silver.pipeline.run_all_silver`) — uma tabela falhando não impede a
-    materialização das demais.
+    materialização das demais. Dimensões são materializadas antes dos fatos:
+    o DDL dos fatos declara FK, que exige a tabela referenciada existente.
     """
     logger = setup_logger()
     falhou = False
@@ -94,6 +105,17 @@ def run_gold() -> None:
     uf = silver_reader.read_entity("uf")
     municipio = silver_reader.read_entity("municipio")
     alunos = silver_reader.read_entity("alunos")
+    integrada = silver_reader.read_entity(ENTIDADE_INTEGRADA)
+
+    # SCD2s lidas uma única vez: alimentam os fatos de meta e a cobertura de
+    # anos da dim_tempo.
+    scd2_por_entidade: dict[str, pa.Table] = {}
+    for entidade in ENTIDADES_META:
+        scd2 = silver_reader.read_scd2_table_raw(entidade)
+        if scd2 is None:
+            logger.warning(f"Silver de '{entidade}' ainda não processada — pulando fato de meta na Gold.")
+            continue
+        scd2_por_entidade[entidade] = scd2
 
     # dim_uf e dim_municipio: fonte = diretório oficial (não entidade Silver)
     try:
@@ -117,8 +139,12 @@ def run_gold() -> None:
         ("dim_municipio", dim_municipio),
         ("dim_rede", transform.build_dim_rede(uf, municipio, alunos)),
         ("dim_serie", transform.build_dim_serie(uf, municipio, alunos)),
+        ("dim_tempo", transform.build_dim_tempo(
+            _coletar_anos(uf, municipio, alunos, integrada, *scd2_por_entidade.values())
+        )),
         ("fact_indicador_uf", transform.build_fact_indicador_uf(uf)),
         ("fact_indicador_municipio", transform.build_fact_indicador_municipio(municipio)),
+        ("fact_alfabetizacao_municipio", transform.build_fact_alfabetizacao_municipio(integrada)),
         ("fact_alunos", transform.build_fact_alunos(alunos)),
     ]
 
@@ -131,13 +157,8 @@ def run_gold() -> None:
             falhou = True
             logger.error(f"Falha materializando '{nome_tabela}' na Gold: {type(exc).__name__}: {exc}")
 
-    for entidade in ENTIDADES_META:
+    for entidade, scd2 in scd2_por_entidade.items():
         try:
-            scd2 = silver_reader.read_scd2_table_raw(entidade)
-            if scd2 is None:
-                logger.warning(f"Silver de '{entidade}' ainda não processada — pulando fato de meta na Gold.")
-                continue
-
             chave_cols = _META_CHAVES[entidade]
             sufixo = entidade.removeprefix("meta_alfabetizacao_")
             nome_tabela = f"fact_meta_resultado_{sufixo}"
