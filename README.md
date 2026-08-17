@@ -1,6 +1,37 @@
 # Pipeline Híbrido de Análise da Alfabetização no Brasil
 
-Tech Challenge Fase 2 (Pós FIAP) — pipeline de dados híbrido (batch + streaming) sobre GCP (Bronze, streaming e Gold), com a Silver processada por DuckDB embarcado e persistida no GCS, para o **Indicador Criança Alfabetizada** (INEP, Pesquisa Alfabetiza Brasil 2023), fonte pública `basedosdados.br_inep_avaliacao_alfabetizacao` (BigQuery público).
+Tech Challenge Fase 2 (Pós FIAP) — pipeline de dados híbrido (batch + streaming) sobre GCP para o **Indicador Criança Alfabetizada** (INEP, Pesquisa Alfabetiza Brasil 2023), com a fonte pública `basedosdados.br_inep_avaliacao_alfabetizacao` (BigQuery público).
+
+Medalhão (Bronze → Silver → Gold): Bronze, streaming e Gold no GCP; a Silver é processada por DuckDB embarcado e persistida em Parquet no GCS.
+
+## Sumário
+
+- [Contexto de negócio](#contexto-de-negócio)
+- [Arquitetura](#arquitetura)
+- [Aplicação em IA](#aplicação-em-ia)
+- [Trade-offs arquiteturais](#trade-offs-arquiteturais)
+- [FinOps](#finops)
+- [Estrutura do repositório](#estrutura-do-repositório)
+- [1. Configurar credenciais](#1-configurar-credenciais)
+- [4. Rodar e testar](#4-rodar-e-testar)
+- [Qualidade e testes](#qualidade-e-testes)
+- [Evidências de execução](#evidências-de-execução)
+
+## Como rodar (resumo)
+
+Pré-requisitos: `gcloud` autenticado, Terraform (provider `google ~> 5.0`) e Python ≥ 3.11.
+
+```bash
+make install
+cp .env.example .env   # preencha TF_VAR_project_id, TF_VAR_billing_account, TF_VAR_alert_email, TF_VAR_team_members (passo 1)
+source .env
+bash infra/bootstrap.sh $TF_VAR_project_id $TF_VAR_gcs_location   # uma vez por projeto GCP
+make infra-init PROJECT_ID=$TF_VAR_project_id                     # uma vez por projeto
+make pipeline-from-scratch   # infra efêmera + batch + streaming + reprocessamento + quality-gate
+make infra-destroy           # sempre que terminar de testar
+```
+
+Detalhes, o aviso do acesso do time e os passos completos (1 a 5) estão logo abaixo.
 
 ## Contexto de negócio
 
@@ -23,6 +54,18 @@ Arquitetura Lambda (camada batch + camada streaming convergindo na mesma camada 
 - **Gold**: `gold.pipeline.run_gold` lê a Silver e materializa um modelo dimensional (Kimball) no BigQuery (`alfabetizacao_analytics`): 5 dimensões (`dim_uf`, `dim_municipio`, `dim_rede`, `dim_serie`, `dim_tempo`), 7 fatos (`fact_indicador_uf`, `fact_indicador_municipio`, `fact_alunos`, `fact_alfabetizacao_municipio` — meta e resultado na mesma linha — e `fact_meta_resultado_{brasil,uf,municipio}`) e 3 marts (views prontas para consumo: `mart_evolucao_indicador_uf`, `mart_aderencia_metas_uf`, `mart_ranking_indicador_municipio`). Chaves substitutas determinísticas (SHA-256 da chave natural, 8 bytes com sinal → INT64) e PK/FK declaradas `NOT ENFORCED` — a integridade é garantida pela construção e verificada pela qualidade, não pelo banco. Cada tabela é recriada do zero a cada execução (`WRITE_TRUNCATE`) — sem merge incremental, sem estado próprio. Modelo completo em [docs/modelo-dimensional.md](docs/modelo-dimensional.md).
 - **Qualidade**: checks declarativos em `src/quality/rules.py` executados por Great Expectations, mapeados às seis dimensões clássicas (unicidade, completude, validade, consistência, precisão, atualidade), com severidade `CRITICA`/`AVISO`; a evidência de cada check é persistida em `alfabetizacao_analytics.data_quality_log`. Detalhes em [docs/qualidade-dados.md](docs/qualidade-dados.md).
 - **FinOps**: orçamento de R$ 1,00 + alertas como salvaguarda, free tiers dimensionando o design, cost labels por componente e ciclo de vida do dado bruto no bucket. Estimativa completa em [docs/estimativa-de-custos.md](docs/estimativa-de-custos.md).
+
+## Aplicação em IA
+
+A camada Gold (modelo dimensional no BigQuery, `alfabetizacao_analytics`) é o ponto de partida para modelos preditivos e analíticos sobre o indicador de alfabetização:
+
+- **Predição de risco de não-alfabetização**: modelo supervisionado sobre `fact_indicador_municipio` + `fact_meta_resultado_municipio` (features territoriais via `dim_municipio` + metas históricas + série temporal por município) para sinalizar municípios/escolas com maior probabilidade de ficar abaixo da meta, permitindo intervenção antes do resultado da avaliação.
+- **Desigualdade educacional**: clusterização de municípios por perfil socioeducacional (combinando `fact_indicador_municipio` com os atributos territoriais de `dim_municipio` — região, capital) para identificar grupos comparáveis e medir o efeito real de políticas públicas, isolando o contexto socioeconômico.
+- **Apoio à decisão de política pública**: séries temporais em `fact_meta_resultado_{uf,municipio}` (`gap_pontos`, `atingiu_meta` por ano) para simular cenários ("o que aconteceria com a meta nacional se a UF X replicasse a trajetória da UF Y") e priorizar investimento onde o retorno marginal em alfabetização é maior.
+- **Feature store para ML no grão do aluno**: `fact_alunos` já entrega a granularidade mais fina (proficiência individual, presença, preenchimento) para features de modelos supervisionados sem precisar voltar à Silver/Bronze.
+- **Busca por similaridade**: um banco vetorial sobre embeddings de perfil municipal (ver trade-off de NoSQL abaixo) permitiria consultas como "encontrar municípios com contexto parecido ao do município X" — útil para transferência de boas práticas entre gestões locais comparáveis.
+
+Os modelos em si não estão implementados neste MVP — a Gold dimensional (dimensões + fatos) já organiza os dados no formato que esse tipo de modelo consome; o próximo passo é treinar contra `alfabetizacao_analytics` diretamente do BigQuery (BigQuery ML ou export para notebook).
 
 ## Stack e por que essas escolhas
 
@@ -70,7 +113,7 @@ Isso preserva o histórico da Bronze sem depender de transações, ao custo de n
 - **Egress**: co-localizar o processamento na mesma nuvem da fonte (BigQuery público) evita custo de transferência entre nuvens — ver trade-off de cloud única acima.
 - **Ciclo de vida do dado bruto**: o bucket do data lake degrada o storage conforme o dado envelhece (30+ dias → Nearline, 180+ dias → Coldline) e aborta multipart uploads interrompidos após 1 dia. O acesso ao dado bruto antigo é raro — a Bronze é a camada de replay (a Silver é recomputada a partir dela, e a própria Bronze pode ser reextraída da fonte pública) — então o histórico bruto não vira custo morto em Standard.
 - **Estimativa de custos**: a planilha completa (recurso × consumo × free tier × preço, com o pior caso) está em [docs/estimativa-de-custos.md](docs/estimativa-de-custos.md).
-- **Gold recomputada, não incremental**: com o volume atual (dezenas de milhares de linhas nas maiores entidades), reler a Silver inteira e sobrescrever a Gold por completo (`WRITE_TRUNCATE`) é mais simples e mais barato em engenharia do que rastrear o que mudou — o custo de processamento fica dentro do free tier de BigQuery (1TB de query/mês cobre esse load job com folga). Se o volume crescer a ponto de o full-recompute pesar no orçamento, merge incremental por partição de `ano` é o próximo passo natural.
+- **Gold recomputada, não incremental**: no volume atual, reler a Silver e reescrever a Gold completa (`WRITE_TRUNCATE`) custa menos em bytes e em complexidade que merge incremental — detalhe e cenário de crescimento em [docs/estimativa-de-custos.md](docs/estimativa-de-custos.md).
 - **Least privilege como controle de custo indireto**: a service account central (`alfabetizacao-pipeline-sa`) recebe papéis com escopo de recurso sempre que o GCP oferece um (Storage Object Admin no bucket específico, BigQuery Data Editor no dataset específico, Pub/Sub Publisher/Subscriber no tópico/subscription específicos). Dois papéis não têm equivalente com escopo de recurso no IAM do GCP e ficam necessariamente no nível do projeto: `roles/bigquery.jobUser` (rodar query/insert é uma operação de projeto, não de dataset) e `roles/monitoring.viewer` (ler a métrica de Consumer Lag). Nada além disso — reduz a superfície de uso indevido de cota.
 
 ## Estrutura do repositório
@@ -108,7 +151,7 @@ gcloud auth application-default login
 cp .env.example .env   # preencher com os valores do projeto (nunca commitar o .env real)
 ```
 
-Edite o `.env` e preencha `TF_VAR_billing_account`, `TF_VAR_alert_email` e `TF_VAR_team_members` com os valores do projeto.
+Edite o `.env` e preencha `TF_VAR_project_id`, `TF_VAR_billing_account`, `TF_VAR_alert_email` e `TF_VAR_team_members` com os valores do projeto.
 
 > ⚠️ **Importante:** dentro de `infra/team-access`, `team_members` é
 > gerenciado como um mapa único pelo Terraform. Se o seu `.env` tiver só o
@@ -188,21 +231,9 @@ Todos os recursos gerenciados pelo Terraform foram desenhados para serem efêmer
 
 ## Qualidade e testes
 
-**Testes de software**: suíte por camada (`tests/` espelhando `src/`), incluindo Property-Based Testing (Hypothesis) nas funções puras de contratos (round-trip de serialização, invariantes de schema) e na configuração de ambiente — `make test` roda tudo.
+Suíte por camada em `tests/` (espelhando `src/`), incluindo Property-Based Testing nas funções puras de contratos e de configuração — `make test` roda tudo.
 
-**Qualidade de dados**: checks declarativos sobre um registry (`src/quality/rules.py`) executados por Great Expectations, mapeados às seis dimensões clássicas (unicidade, completude, validade, consistência, precisão, atualidade), com severidade `CRITICA`/`AVISO`. Três pontos de entrada: inline na Silver (por entidade, a cada run), standalone (`make quality`, com isolamento de falhas entre entidades) e bloqueante (`make quality-gate`), que só falha quando há falha `CRITICA`. A evidência de cada check — inclusive a dos que passam — é persistida em `alfabetizacao_analytics.data_quality_log`. Design completo em [docs/qualidade-dados.md](docs/qualidade-dados.md).
-
-## Aplicação em IA
-
-A camada Gold (modelo dimensional no BigQuery, `alfabetizacao_analytics`) é o ponto de partida para modelos preditivos e analíticos sobre o indicador de alfabetização:
-
-- **Predição de risco de não-alfabetização**: modelo supervisionado sobre `fact_indicador_municipio` + `fact_meta_resultado_municipio` (features territoriais via `dim_municipio` + metas históricas + série temporal por município) para sinalizar municípios/escolas com maior probabilidade de ficar abaixo da meta, permitindo intervenção antes do resultado da avaliação.
-- **Desigualdade educacional**: clusterização de municípios por perfil socioeducacional (combinando `fact_indicador_municipio` com os atributos territoriais de `dim_municipio` — região, capital) para identificar grupos comparáveis e medir o efeito real de políticas públicas, isolando o contexto socioeconômico.
-- **Apoio à decisão de política pública**: séries temporais em `fact_meta_resultado_{uf,municipio}` (`gap_pontos`, `atingiu_meta` por ano) para simular cenários ("o que aconteceria com a meta nacional se a UF X replicasse a trajetória da UF Y") e priorizar investimento onde o retorno marginal em alfabetização é maior.
-- **Feature store para ML no grão do aluno**: `fact_alunos` já entrega a granularidade mais fina (proficiência individual, presença, preenchimento) para features de modelos supervisionados sem precisar voltar à Silver/Bronze.
-- **Busca por similaridade**: um banco vetorial sobre embeddings de perfil municipal (ver trade-off de NoSQL acima) permitiria consultas como "encontrar municípios com contexto parecido ao do município X" — útil para transferência de boas práticas entre gestões locais comparáveis.
-
-Os modelos em si não estão implementados neste MVP — a Gold dimensional (dimensões + fatos) já organiza os dados no formato que esse tipo de modelo consome; o próximo passo é treinar contra `alfabetizacao_analytics` diretamente do BigQuery (BigQuery ML ou export para notebook).
+Qualidade de dados: checks declarativos sobre um registry (`src/quality/rules.py`) executados por Great Expectations, mapeados às seis dimensões clássicas, com severidade `CRITICA`/`AVISO`; os três pontos de entrada (inline na Silver, `make quality`, `make quality-gate` bloqueante) e o design completo estão em [docs/qualidade-dados.md](docs/qualidade-dados.md).
 
 ## Roadmap
 
@@ -235,4 +266,4 @@ WHERE severidade = 'CRITICA' AND passou = FALSE
 ORDER BY timestamp DESC;
 ```
 
-Rodada completa executada em GCP em 2026-08-17 (`make pipeline-from-scratch`): destroy de 30 recursos → apply de 36 → Bronze (6 entidades, **3.902.927 linhas**, `rows_read == rows_written` em todas — zero rejeições de contrato em dados reais) → Silver (dedup por chave de negócio: `meta_alfabetizacao_uf` 81 → 80, `meta_alfabetizacao_municipio` 10.704 → 10.698) → Gold (5 dimensões + 7 fatos + 3 marts) → streaming (Producer ×3 + Consumer) → **quality-gate bloqueante: 76 checks, 0 falhas** (212 vereditos persistidos na janela, todos `passou = true`). O Cloud Scheduler disparou o Producer sozinho a cada 10 min durante a rodada (cron `*/10 * * * *` funcionando sem intervenção). Na janela da rodada, o BigQuery registrou 94 query jobs — 37 servidos pelo cache de resultados — totalizando 125,8 MB cobrados (~US$ 0,0008); os números por etapa e o cenário de scan frio (~259 MiB → ~US$ 0,0016/rodada) estão em [docs/estimativa-de-custos.md](docs/estimativa-de-custos.md#medições-reais-rodada-de-2026-08-17).
+Rodada completa em GCP em 2026-08-17 (`make pipeline-from-scratch`): 3.902.927 linhas extraídas com zero rejeição de contrato, 0 falhas em 76 checks (212 vereditos) e o Cloud Scheduler disparando o Producer sozinho a cada 10 min — números por etapa, custo real da rodada e cenário de crescimento em [docs/estimativa-de-custos.md](docs/estimativa-de-custos.md#medições-reais-rodada-de-2026-08-17).
