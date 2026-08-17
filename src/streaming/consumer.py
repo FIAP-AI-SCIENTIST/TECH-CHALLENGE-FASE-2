@@ -19,6 +19,23 @@ from observability.monitoring import get_consumer_lag
 
 TIMEOUT_SECONDS = 10
 LAG_WARNING_THRESHOLD = 100
+# Teto de caracteres do payload no log de descarte: o suficiente para
+# identificar o que veio errado, sem despejar o corpo inteiro de cada mensagem
+# ruim no log estruturado.
+PAYLOAD_LOG_MAX_CHARS = 256
+
+
+def _payload_para_log(data: bytes) -> str:
+    """Payload em texto, truncado, para servir de evidência do descarte.
+
+    `errors="replace"` porque o payload de uma mensagem irrecuperável pode não
+    ser UTF-8 válido — e o log dessa mensagem é justamente onde isso precisa
+    aparecer, em vez de levantar outra exceção.
+    """
+    texto = data.decode("utf-8", errors="replace")
+    if len(texto) <= PAYLOAD_LOG_MAX_CHARS:
+        return texto
+    return f"{texto[:PAYLOAD_LOG_MAX_CHARS]}... (truncado)"
 
 
 @with_retry()
@@ -43,10 +60,23 @@ def _do_ack(client: pubsub_v1.SubscriberClient, subscription: str, ack_ids: list
 def consume_batch(max_messages: int = 10) -> None:
     """Consome um micro-batch de eventos e grava na Bronze — execução single-shot.
 
-    Cada mensagem é processada e ackada independentemente: uma mensagem
-    malformada não impede o ack das demais que deram certo (isolamento
-    por mensagem). Ack só acontece depois da escrita confirmada na Bronze
-    (garante at-least-once).
+    O tratamento de erro distingue duas naturezas de falha, e essa distinção é o
+    que impede uma mensagem ruim de parar o consumo:
+
+    - **Irrecuperável** — entidade não registrada ou payload que não satisfaz o
+      contrato. Reentregar produz o mesmo resultado para sempre, então a mensagem
+      é descartada: log de erro com `message_id`, entidade e payload truncado,
+      e **ack** para que ela saia da subscription. Como cada execução puxa até
+      `max_messages`, mensagens nessa situação acumuladas ocupariam o lote inteiro
+      e nenhuma mensagem boa voltaria a ser consumida.
+    - **Transitório** — a mensagem é válida, mas a escrita na Bronze falhou (erro
+      de rede/GCS). Aqui a reentrega **é** o mecanismo de recuperação: a mensagem
+      **não** é ackada e volta no próximo consumo.
+
+    O descarte é perda de dado deliberada e localizada, aceitável porque a fonte
+    pode republicar e a evidência fica registrada. A solução completa é uma
+    dead-letter queue no Pub/Sub, que troca descarte por quarentena — isto aqui é
+    mitigação do modo de falha, não substituto dela.
 
     A escrita é append-only: a partição do dia acumula um arquivo por
     execução e nunca é limpa, então rodar o consumer várias vezes no mesmo
@@ -64,20 +94,23 @@ def consume_batch(max_messages: int = 10) -> None:
         chave = f"data_ingestao={date.today().isoformat()}"
         grupos: dict = defaultdict(list)
         ack_ids_ok: list = []
+        # Ackadas por serem irrecuperáveis — contadas em separado das gravadas,
+        # porque "saiu da subscription" aqui significa descartada, não processada.
+        ack_ids_descartadas: list = []
         rows_read = 0
 
         for msg in messages:
             rows_read += 1
             entidade = msg.message.attributes.get("entidade")
             if not is_registered(entidade):
-                # Semântica de ack inalterada nesta passagem: a mensagem não é
-                # ackada e o Pub/Sub reentrega. É um modo de falha conhecido
-                # (mensagens irrecuperáveis podem ocupar o lote inteiro) cujo
-                # tratamento é decisão própria, ainda pendente.
                 logger.error(
                     f"Entidade desconhecida em mensagem recebida: {entidade}",
-                    extra={"message_id": msg.message.message_id},
+                    extra={
+                        "message_id": msg.message.message_id,
+                        "payload": _payload_para_log(msg.message.data),
+                    },
                 )
+                ack_ids_descartadas.append(msg.ack_id)
                 continue
             modelo = model_for(entidade)
 
@@ -87,8 +120,13 @@ def consume_batch(max_messages: int = 10) -> None:
             except Exception as exc:
                 logger.error(
                     f"Falha ao decodificar/validar mensagem: {type(exc).__name__}: {exc}",
-                    extra={"message_id": msg.message.message_id, "entidade": entidade},
+                    extra={
+                        "message_id": msg.message.message_id,
+                        "entidade": entidade,
+                        "payload": _payload_para_log(msg.message.data),
+                    },
                 )
+                ack_ids_descartadas.append(msg.ack_id)
                 continue
 
             # publish_time é o event time: quando o evento entrou no Pub/Sub.
@@ -127,13 +165,28 @@ def consume_batch(max_messages: int = 10) -> None:
                     f"Falha ao escrever partição da Bronze: {type(exc).__name__}: {exc}",
                     extra={"entidade": entidade},
                 )
-                # Não ackar — mensagens ficam pendentes, Pub/Sub reentrega
+                # Não ackar — a mensagem é válida e a reentrega é o mecanismo de
+                # recuperação para falha transitória de escrita.
 
-        if ack_ids_ok:
-            _do_ack(client, subscription_path, ack_ids_ok)
+        # Gravadas e descartadas saem juntas da subscription, por motivos opostos:
+        # as primeiras porque foram processadas, as segundas porque reentregá-las
+        # repetiria o mesmo erro indefinidamente.
+        ack_ids = ack_ids_ok + ack_ids_descartadas
+        if ack_ids:
+            _do_ack(client, subscription_path, ack_ids)
+
+        if ack_ids_descartadas:
+            logger.error(
+                f"{len(ack_ids_descartadas)} mensagem(ns) irrecuperável(is) descartada(s) e ackada(s) "
+                "para não bloquear a subscription — ver os logs de erro anteriores para o payload"
+            )
 
         run.rows_read = rows_read
         run.rows_written = rows_written
+        # Nota de leitura da auditoria: `rows_read - rows_written` é "linhas não
+        # gravadas nesta execução", o que soma dois casos distintos — descartadas
+        # (não voltam) e válidas cuja escrita falhou (voltam na reentrega). Quem
+        # precisa separar os dois usa o log de descarte acima, que traz a contagem.
 
         lag = get_consumer_lag()
         if lag is not None and lag > LAG_WARNING_THRESHOLD:

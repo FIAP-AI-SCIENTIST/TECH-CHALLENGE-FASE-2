@@ -94,10 +94,19 @@ reusados).
 O consumer grava micro-batches em `bronze/<entidade>/data_ingestao=YYYY-MM-DD/part-{run_id}.parquet`,
 append-only.
 
-**Cuidado conhecido**: mensagem publicada com um nome de entidade que não está no registro é logada
-como erro e **não** é confirmada, então o Pub/Sub a reentrega indefinidamente. Como cada consumo puxa
-até 10 mensagens, algumas mensagens nessa situação podem ocupar o lote e travar o progresso. Confira
-o nome da entidade antes de publicar em volume. O tratamento definitivo está em discussão.
+**Se você errar o nome da entidade**: a mensagem é logada como erro (com `message_id` e o payload
+truncado, para você identificar qual foi), **confirmada** e descartada. Isso é deliberado: reentregar
+uma mensagem cuja entidade não existe no registro repetiria o mesmo erro para sempre e, como cada
+consumo puxa até 10 mensagens, algumas dessas acumuladas travariam o consumo inteiro. O mesmo vale
+para payload que não satisfaz o contrato.
+
+O que **não** é descartado: mensagem válida cuja escrita na Bronze falhou (erro transitório de rede
+ou GCS). Essa não é confirmada e volta no próximo consumo — ali a reentrega é o mecanismo correto de
+recuperação.
+
+Consequência prática para você: dado descartado precisa ser **republicado** pela fonte. A contagem de
+descartes aparece no log da execução; uma dead-letter queue no Pub/Sub (que trocaria descarte por
+quarentena) segue como evolução registrada, não implementada.
 
 ## 5. Aterrou na Bronze ≠ está no pipeline
 
