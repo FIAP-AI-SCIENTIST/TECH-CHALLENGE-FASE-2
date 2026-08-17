@@ -1,19 +1,26 @@
 """Testes do módulo streaming.consumer — consumo de eventos e escrita em micro-batch na Bronze."""
 
 import json
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
+import pyarrow as pa
 import pytest
 
 from streaming.consumer import _do_ack, _do_pull, consume_batch
 
+_PUBLISH_TIME_PADRAO = datetime(2026, 8, 17, 12, 0, 0, tzinfo=timezone.utc)
 
-def _make_message(entidade: str, payload: dict, message_id: str = "m1", ack_id: str = "a1"):
+
+def _make_message(entidade: str, payload: dict, message_id: str = "m1", ack_id: str = "a1", publish_time=None):
     msg = MagicMock()
     msg.ack_id = ack_id
     msg.message.message_id = message_id
     msg.message.attributes = {"tipo_evento": "indicador", "entidade": entidade}
     msg.message.data = json.dumps(payload).encode("utf-8")
+    # O Pub/Sub real sempre devolve publish_time (datetime com tz UTC) — o mock
+    # precisa ser fiel, porque o consumer grava esse valor no Parquet.
+    msg.message.publish_time = publish_time or _PUBLISH_TIME_PADRAO
     return msg
 
 
@@ -140,6 +147,20 @@ class TestConsumeBatch:
 
         assert mock_run.rows_read == 1
         assert mock_run.rows_written == 1
+
+    def test_writes_publish_time_as_data_evento(self):
+        """A tabela gravada na Bronze carrega o event time do Pub/Sub por linha."""
+        t1 = datetime(2026, 8, 17, 10, 30, 0, tzinfo=timezone.utc)
+        t2 = datetime(2026, 8, 17, 10, 31, 0, tzinfo=timezone.utc)
+        msgs = [
+            _make_message("uf", {"ano": 2024, "sigla_uf": "SP"}, message_id="m1", ack_id="a1", publish_time=t1),
+            _make_message("uf", {"ano": 2024, "sigla_uf": "RJ"}, message_id="m2", ack_id="a2", publish_time=t2),
+        ]
+        _ack, _clear, mock_write, _run = self._run_with_messages(msgs)
+
+        table = mock_write.call_args.args[2]
+        assert table.schema.field("data_evento").type == pa.timestamp("us", tz="UTC")
+        assert table.column("data_evento").to_pylist() == [t1, t2]
 
     def test_warns_when_lag_above_threshold(self):
         msg = _make_message("uf", {"ano": 2024, "sigla_uf": "SP"})
