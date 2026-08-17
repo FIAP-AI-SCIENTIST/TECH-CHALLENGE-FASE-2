@@ -7,6 +7,7 @@ import uuid
 from google.cloud import pubsub_v1
 
 from common.retry import with_retry
+from config import get_settings
 from contracts.models import (
     DadosAlunosRecord,
     MetaAlfabetizacaoMunicipioRecord,
@@ -16,8 +17,6 @@ from contracts.models import (
 )
 from observability.logging import log_execution
 
-PROJECT_ID = "useful-space-277919"
-TOPIC_NAME = "alfabetizacao-streaming-events"
 TIMEOUT_SECONDS = 10
 
 # Mapa tipo_evento -> modelo(s) candidatos (contratos ja existentes, sem contrato novo)
@@ -149,9 +148,10 @@ def produce_events(tipo_evento: str, n: int = 1) -> None:
     Não é um processo de longa duração: gera o lote, publica, termina.
     Repetição/agendamento é responsabilidade de um trigger externo.
     """
-    with log_execution(unit="Streaming_Producer", layer="Bronze") as run:
+    with log_execution(step="Streaming_Producer", layer="Bronze") as run:
         client = pubsub_v1.PublisherClient()
-        topic_path = client.topic_path(PROJECT_ID, TOPIC_NAME)
+        settings = get_settings()
+        topic_path = client.topic_path(settings.project_id, settings.topic_name)
 
         published = 0
         for _ in range(n):

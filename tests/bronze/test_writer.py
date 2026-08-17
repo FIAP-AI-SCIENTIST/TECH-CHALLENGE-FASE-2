@@ -6,8 +6,9 @@ from unittest.mock import MagicMock, patch
 import pyarrow as pa
 import pytest
 
+from config import get_settings
+
 from bronze.writer import (
-    BUCKET_NAME,
     build_partition_path,
     clear_partition,
     write_partition,

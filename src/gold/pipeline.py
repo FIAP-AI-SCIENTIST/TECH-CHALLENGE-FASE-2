@@ -1,5 +1,5 @@
 """Orquestração da camada Gold — dimensões e fatos materializados no
-BigQuery (dataset `alfabetizacao_analytics`) a partir da Silver.
+BigQuery (dataset analítico) a partir da Silver.
 
 Cada tabela Gold é recomputada do zero a cada execução (WRITE_TRUNCATE no
 load job) — sem merge incremental, mesma filosofia de posse total de
@@ -8,8 +8,8 @@ partição da Bronze/Silver, aplicada aqui à tabela inteira.
 
 import pyarrow as pa
 
-from bronze.writer import BUCKET_NAME
 from common.lock import gcs_lock
+from config import get_settings
 from gold import marts, transform
 from gold.writer import write_table
 from observability.logging import log_execution, setup_logger
@@ -34,8 +34,8 @@ def _materializar(nome_tabela: str, table) -> int:
         setup_logger().warning(f"Gold '{nome_tabela}' sem colunas — fonte Silver ainda vazia, pulando.")
         return 0
 
-    with gcs_lock(BUCKET_NAME, f"gold/.locks/{nome_tabela}.lock"):
-        with log_execution(unit="Gold", layer="Gold") as run:
+    with gcs_lock(get_settings().bucket_name, f"gold/.locks/{nome_tabela}.lock"):
+        with log_execution(step="Gold", layer="Gold") as run:
             rows = write_table(nome_tabela, table)
             run.rows_read = table.num_rows
             run.rows_written = rows
@@ -153,7 +153,7 @@ def run_gold() -> None:
     # por view.
     for nome_view in marts.MART_QUERIES:
         try:
-            with log_execution(unit="Gold", layer="Gold"):
+            with log_execution(step="Gold", layer="Gold"):
                 marts.create_view(nome_view)
         except Exception as exc:
             falhou = True

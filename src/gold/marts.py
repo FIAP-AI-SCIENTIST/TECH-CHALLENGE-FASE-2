@@ -8,10 +8,8 @@ vira `` `projeto.dataset`. `` em produção e string vazia nos testes DuckDB.
 
 from google.cloud import bigquery
 
+from config import get_settings
 from gold import schema as gold_schema
-
-PROJECT_ID = gold_schema.PROJECT_ID
-DATASET_ID = gold_schema.DATASET_ID
 
 MART_QUERIES: dict[str, str] = {
     # Grão (ano, sigla_uf): evolução temporal do indicador, com variação ano a ano.
@@ -60,9 +58,15 @@ JOIN {prefix}dim_municipio d ON p.id_municipio = d.id_municipio
 }
 
 
-def render_view_ddl(nome_view: str, project_id: str = PROJECT_ID, dataset_id: str = DATASET_ID) -> str:
+def render_view_ddl(nome_view: str, project_id: str | None = None, dataset_id: str | None = None) -> str:
     """DDL completo da view: `CREATE OR REPLACE VIEW` sobre a query com prefixo
     qualificado (backticks obrigatórios — o project_id contém hífens)."""
+    if project_id is None or dataset_id is None:
+        settings = get_settings()
+        if project_id is None:
+            project_id = settings.project_id
+        if dataset_id is None:
+            dataset_id = settings.dataset_id
     prefixo = f"`{project_id}.{dataset_id}`."
     corpo = MART_QUERIES[nome_view].format(prefix=prefixo)
     return f"CREATE OR REPLACE VIEW `{project_id}.{dataset_id}.{nome_view}` AS\n{corpo}"
@@ -74,5 +78,5 @@ def create_view(nome_view: str) -> None:
     DDL idempotente (OR REPLACE) — sem lock GCS, view não guarda estado a proteger. O retry de
     falhas transitórias vem de `gold.schema.run_ddl`.
     """
-    client = bigquery.Client(project=PROJECT_ID)
+    client = bigquery.Client(project=get_settings().project_id)
     gold_schema.run_ddl(client, render_view_ddl(nome_view))

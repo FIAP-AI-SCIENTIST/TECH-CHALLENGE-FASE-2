@@ -17,7 +17,7 @@ from observability.logging import RunContext
 def _make_run(**kwargs):
     defaults = dict(
         run_id="test-id",
-        unit="test-unit",
+        step="test-step",
         layer="bronze",
         timestamp=datetime(2025, 1, 1, 12, 0, 0),
     )
@@ -33,7 +33,7 @@ class TestBuildPayload:
         payload = _build_payload(run)
 
         assert payload["run_id"] == "test-id"
-        assert payload["unit"] == "test-unit"
+        assert payload["step"] == "test-step"
         assert payload["layer"] == "bronze"
         assert payload["status"] == "SUCCESS"
         assert payload["timestamp"] == "2025-01-01T12:00:00"

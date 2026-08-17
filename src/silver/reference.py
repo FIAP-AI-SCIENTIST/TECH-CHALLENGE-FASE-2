@@ -12,8 +12,8 @@ import time  # pyright: ignore[reportUnusedImport] - necessario para with_retry 
 from google.cloud import bigquery
 
 from common.retry import with_retry
+from config import get_settings
 
-PROJECT_ID = "useful-space-277919"
 DICIONARIO_TABLE = "basedosdados.br_inep_avaliacao_alfabetizacao.dicionario"
 DIRETORIO_UF_TABLE = "basedosdados.br_bd_diretorios_brasil.uf"
 DIRETORIO_MUNICIPIO_TABLE = "basedosdados.br_bd_diretorios_brasil.municipio"
@@ -38,7 +38,8 @@ def get_dicionario(id_tabela: str, nome_coluna: str) -> tuple[dict[str, str], in
 
     Ex: get_dicionario("uf", "rede") -> ({"1": "Federal", "2": "Estadual", ...}, bytes)
     """
-    client = bigquery.Client(project=PROJECT_ID)
+    settings = get_settings()
+    client = bigquery.Client(project=settings.project_id)
     sql = f"""
         SELECT chave, valor
         FROM `{DICIONARIO_TABLE}`
@@ -50,7 +51,8 @@ def get_dicionario(id_tabela: str, nome_coluna: str) -> tuple[dict[str, str], in
 
 def get_diretorio_uf() -> tuple[dict[str, str], int | None]:
     """Mapa sigla -> nome completo da UF, + bytes processados pela consulta."""
-    client = bigquery.Client(project=PROJECT_ID)
+    settings = get_settings()
+    client = bigquery.Client(project=settings.project_id)
     sql = f"SELECT DISTINCT sigla, nome FROM `{DIRETORIO_UF_TABLE}`"
     rows, bytes_processed = _do_query(client, sql)
     return {row["sigla"]: row["nome"] for row in rows}, bytes_processed
@@ -62,7 +64,8 @@ def get_diretorio_municipio() -> tuple[dict[str, dict], int | None]:
     Subconjunto de colunas do domínio — o resto do diretório (hierarquia de
     saúde, geocódigos alternativos, geometria) fica fora do escopo.
     """
-    client = bigquery.Client(project=PROJECT_ID)
+    settings = get_settings()
+    client = bigquery.Client(project=settings.project_id)
     sql = f"""
         SELECT id_municipio, nome, sigla_uf, nome_regiao, capital_uf
         FROM `{DIRETORIO_MUNICIPIO_TABLE}`

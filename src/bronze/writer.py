@@ -8,8 +8,8 @@ import pyarrow.parquet as pq
 from google.cloud import storage
 
 from common.retry import with_retry
+from config import get_settings
 
-BUCKET_NAME = "useful-space-277919-datalake"
 TIMEOUT_SECONDS = 10
 
 
@@ -37,7 +37,8 @@ def write_partition(entidade: str, chave: str, table: pa.Table, part_id: str) ->
     """
     client = storage.Client()
     prefix = build_partition_path(entidade, chave)
-    bucket = client.bucket(BUCKET_NAME)
+    settings = get_settings()
+    bucket = client.bucket(settings.bucket_name)
 
     # Serializa para Parquet
     buffer = io.BytesIO()
@@ -59,7 +60,8 @@ def clear_partition(entidade: str, chave: str) -> None:
     """
     client = storage.Client()
     prefix = build_partition_path(entidade, chave)
-    _delete_blobs_under_prefix(client, BUCKET_NAME, prefix)
+    settings = get_settings()
+    _delete_blobs_under_prefix(client, settings.bucket_name, prefix)
 
 
 @with_retry()

@@ -57,7 +57,7 @@ class TestLogExecution:
 
     def test_success_status_and_duration(self):
         with patch("observability.audit.write_audit_row") as mock_write:
-            with log_execution("unit-A", "bronze") as run:
+            with log_execution("step-A", "bronze") as run:
                 run.rows_read = 100
                 run.rows_written = 95
 
@@ -72,7 +72,7 @@ class TestLogExecution:
     def test_error_status_and_reraise(self):
         with patch("observability.audit.write_audit_row") as mock_write:
             with pytest.raises(ValueError, match="boom"):
-                with log_execution("unit-B", "silver") as run:
+                with log_execution("step-B", "silver") as run:
                     run.rows_read = 50
                     raise ValueError("boom")
 
@@ -85,7 +85,7 @@ class TestLogExecution:
         _reset_logger_state()
         with patch("observability.audit.write_audit_row"):
             with pytest.raises(RuntimeError):
-                with log_execution("unit-C", "gold"):
+                with log_execution("step-C", "gold"):
                     raise RuntimeError("falha")
 
         error_records = [

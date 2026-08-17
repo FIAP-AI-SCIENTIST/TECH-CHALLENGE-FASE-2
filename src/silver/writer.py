@@ -12,7 +12,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from google.cloud import storage
 
-from bronze.writer import BUCKET_NAME, _delete_blobs_under_prefix, _upload_blob
+from bronze.writer import _delete_blobs_under_prefix, _upload_blob
+from config import get_settings
 
 SILVER_PREFIX = "silver"
 
@@ -31,7 +32,7 @@ def clear_entity(entidade: str, chave: str) -> None:
     """
     client = storage.Client()
     prefix = _entity_partition_path(entidade, chave)
-    _delete_blobs_under_prefix(client, BUCKET_NAME, prefix)
+    _delete_blobs_under_prefix(client, get_settings().bucket_name, prefix)
 
 
 def write_entity(entidade: str, chave: str, table: pa.Table) -> int:
@@ -42,7 +43,7 @@ def write_entity(entidade: str, chave: str, table: pa.Table) -> int:
     """
     client = storage.Client()
     prefix = _entity_partition_path(entidade, chave)
-    bucket = client.bucket(BUCKET_NAME)
+    bucket = client.bucket(get_settings().bucket_name)
 
     buffer = io.BytesIO()
     pq.write_table(table, buffer)
@@ -58,7 +59,7 @@ def write_scd2_table(entidade: str, table: pa.Table) -> int:
     fechadas) — sem chave de partição.
     """
     client = storage.Client()
-    bucket = client.bucket(BUCKET_NAME)
+    bucket = client.bucket(get_settings().bucket_name)
 
     buffer = io.BytesIO()
     pq.write_table(table, buffer)

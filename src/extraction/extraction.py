@@ -10,6 +10,7 @@ from bronze import reader as bronze_reader
 from bronze import writer as bronze_writer
 from common.lock import gcs_lock
 from common.retry import with_retry
+from config import get_settings
 from contracts.models import (
     DadosAlunosRecord,
     MetaAlfabetizacaoBrasilRecord,
@@ -22,8 +23,6 @@ from contracts.schema_mapper import to_pyarrow_schema
 from contracts.serialization import to_pyarrow_table
 from observability.logging import log_execution
 
-PROJECT_ID = "useful-space-277919"
-SOURCE_DATASET = "basedosdados.br_inep_avaliacao_alfabetizacao"
 BATCH_THRESHOLD = 500_000
 BATCH_SIZE = 50_000
 TIMEOUT_SECONDS = 10
@@ -130,10 +129,11 @@ def _run_extraction(entidade: str, sql: str) -> None:
     arquivos de dois runs diferentes.
     """
     _tabela, modelo = ENTITY_TABLE_MAP[entidade]
+    settings = get_settings()
 
-    with gcs_lock(bronze_writer.BUCKET_NAME, f"bronze/.locks/{entidade}.lock"):
-        with log_execution(unit="Bronze_Ingestion", layer="Bronze") as run:
-            client = bigquery.Client(project=PROJECT_ID)
+    with gcs_lock(settings.bucket_name, f"bronze/.locks/{entidade}.lock"):
+        with log_execution(step="Bronze_Ingestion", layer="Bronze") as run:
+            client = bigquery.Client(project=settings.project_id)
             rows, bytes_processed = _do_query(client, sql)
             row_batches = _split_into_batches(rows, getattr(rows, "total_rows", None))
 
@@ -157,7 +157,7 @@ def _run_extraction(entidade: str, sql: str) -> None:
 def extract_full(entidade: str) -> None:
     """Extrai todos os dados de uma entidade do BigQuery para Bronze."""
     tabela, _modelo = ENTITY_TABLE_MAP[entidade]
-    sql = f"SELECT * FROM `{SOURCE_DATASET}.{tabela}`"
+    sql = f"SELECT * FROM `{get_settings().source_dataset}.{tabela}`"
     _run_extraction(entidade, sql)
 
 
@@ -171,7 +171,7 @@ def extract_incremental(entidade: str) -> None:
         return
 
     max_existing = max(existing_years)
-    sql = f"SELECT * FROM `{SOURCE_DATASET}.{tabela}` WHERE ano > {max_existing}"
+    sql = f"SELECT * FROM `{get_settings().source_dataset}.{tabela}` WHERE ano > {max_existing}"
     _run_extraction(entidade, sql)
 
 

@@ -9,6 +9,7 @@ from google.cloud import pubsub_v1
 
 from bronze import writer as bronze_writer
 from common.retry import with_retry
+from config import get_settings
 from contracts.models import (
     DadosAlunosRecord,
     MetaAlfabetizacaoMunicipioRecord,
@@ -21,8 +22,6 @@ from contracts.serialization import to_pyarrow_table
 from observability.logging import log_execution, setup_logger
 from observability.monitoring import get_consumer_lag
 
-PROJECT_ID = "useful-space-277919"
-SUBSCRIPTION_NAME = "alfabetizacao-streaming-consumer-sub"
 TIMEOUT_SECONDS = 10
 LAG_WARNING_THRESHOLD = 100
 
@@ -61,7 +60,7 @@ def consume_batch(max_messages: int = 10) -> None:
     Cada mensagem é processada e ackada independentemente: uma mensagem
     malformada não impede o ack das demais que deram certo (isolamento
     por mensagem). Ack só acontece depois da escrita confirmada na Bronze
-    (garante at-least-once, NFR05).
+    (garante at-least-once).
 
     A escrita é append-only: a partição do dia acumula um arquivo por
     execução e nunca é limpa, então rodar o consumer várias vezes no mesmo
@@ -69,9 +68,10 @@ def consume_batch(max_messages: int = 10) -> None:
     """
     logger = setup_logger()
 
-    with log_execution(unit="Streaming_Consumer", layer="Bronze") as run:
+    with log_execution(step="Streaming_Consumer", layer="Bronze") as run:
         client = pubsub_v1.SubscriberClient()
-        subscription_path = client.subscription_path(PROJECT_ID, SUBSCRIPTION_NAME)
+        settings = get_settings()
+        subscription_path = client.subscription_path(settings.project_id, settings.subscription_name)
 
         messages = _do_pull(client, subscription_path, max_messages)
 

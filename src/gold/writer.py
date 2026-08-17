@@ -1,4 +1,4 @@
-"""Escrita de tabelas Gold no BigQuery (dataset `alfabetizacao_analytics`).
+"""Escrita de tabelas Gold no BigQuery (dataset analítico).
 
 Cada tabela é sobrescrita por completo a cada execução (load job com
 WRITE_TRUNCATE, schema inferido do próprio Parquet autodescritivo) — a Gold
@@ -17,18 +17,18 @@ import pyarrow.parquet as pq
 from google.cloud import bigquery
 
 from common.retry import with_retry
+from config import get_settings
 from gold import schema as gold_schema
 
-PROJECT_ID = "useful-space-277919"
-DATASET_ID = "alfabetizacao_analytics"
 TIMEOUT_SECONDS = 30
 
 
 def write_table(nome_tabela: str, table: pa.Table) -> int:
     """Sobrescreve `nome_tabela` no dataset analítico a partir de `table`.
     Retorna o número de linhas escritas."""
-    client = bigquery.Client(project=PROJECT_ID)
-    table_ref = f"{PROJECT_ID}.{DATASET_ID}.{nome_tabela}"
+    settings = get_settings()
+    client = bigquery.Client(project=settings.project_id)
+    table_ref = f"{settings.project_id}.{settings.dataset_id}.{nome_tabela}"
 
     # Garante partição/clustering antes do load: no-op para dim_* e para
     # tabelas já criadas — o WRITE_TRUNCATE preserva a definição.

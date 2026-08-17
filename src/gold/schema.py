@@ -12,13 +12,13 @@ minúsculas de referência, onde a otimização seria cerimônia sem efeito.
 """
 
 import time  # pyright: ignore[reportUnusedImport] - necessario para with_retry (common.retry) interceptar time.sleep neste modulo
+from collections.abc import Mapping
 
 from google.cloud import bigquery
 
 from common.retry import with_retry
+from config import get_settings
 
-PROJECT_ID = "useful-space-277919"
-DATASET_ID = "alfabetizacao_analytics"
 TIMEOUT_SECONDS = 30
 
 # Bounds 2016-2031: do primeiro ano da fonte (2016) ao ano final da meta nacional
@@ -50,28 +50,30 @@ _COLUNAS_META_RESULTADO = """  ano INT64,
 
 
 def _ddl(nome: str, colunas: str, cluster: str | None = None) -> str:
+    settings = get_settings()
     cluster_sql = f"\nCLUSTER BY {cluster}" if cluster else ""
     return (
-        f"CREATE TABLE IF NOT EXISTS `{PROJECT_ID}.{DATASET_ID}.{nome}` (\n"
+        f"CREATE TABLE IF NOT EXISTS `{settings.project_id}.{settings.dataset_id}.{nome}` (\n"
         f"{colunas}\n"
         f")\n{_PARTITION_ANO}{cluster_sql}"
     )
 
 
-TABLE_DDL: dict[str, str] = {
-    "fact_indicador_uf": _ddl(
-        "fact_indicador_uf",
-        "  ano INT64,\n  sigla_uf STRING,\n  serie STRING,\n  rede STRING,\n" + _COLUNAS_MEDIDAS_INDICADOR,
-        cluster="sigla_uf",
-    ),
-    "fact_indicador_municipio": _ddl(
-        "fact_indicador_municipio",
-        "  ano INT64,\n  id_municipio STRING,\n  serie STRING,\n  rede STRING,\n" + _COLUNAS_MEDIDAS_INDICADOR,
-        cluster="id_municipio",
-    ),
-    "fact_alunos": _ddl(
-        "fact_alunos",
-        """  ano INT64,
+def _table_ddl() -> dict[str, str]:
+    return {
+        "fact_indicador_uf": _ddl(
+            "fact_indicador_uf",
+            "  ano INT64,\n  sigla_uf STRING,\n  serie STRING,\n  rede STRING,\n" + _COLUNAS_MEDIDAS_INDICADOR,
+            cluster="sigla_uf",
+        ),
+        "fact_indicador_municipio": _ddl(
+            "fact_indicador_municipio",
+            "  ano INT64,\n  id_municipio STRING,\n  serie STRING,\n  rede STRING,\n" + _COLUNAS_MEDIDAS_INDICADOR,
+            cluster="id_municipio",
+        ),
+        "fact_alunos": _ddl(
+            "fact_alunos",
+            """  ano INT64,
   id_municipio STRING,
   id_escola STRING,
   id_aluno STRING,
@@ -83,24 +85,40 @@ TABLE_DDL: dict[str, str] = {
   alfabetizado STRING,
   proficiencia FLOAT64,
   peso_aluno FLOAT64""",
-        cluster="id_municipio",
-    ),
-    "fact_meta_resultado_brasil": _ddl(
-        "fact_meta_resultado_brasil",
-        "  rede STRING,\n" + _COLUNAS_META_RESULTADO,
-        # Sem clustering: chave `rede` tem cardinalidade ~4.
-    ),
-    "fact_meta_resultado_uf": _ddl(
-        "fact_meta_resultado_uf",
-        "  sigla_uf STRING,\n  rede STRING,\n" + _COLUNAS_META_RESULTADO,
-        cluster="sigla_uf",
-    ),
-    "fact_meta_resultado_municipio": _ddl(
-        "fact_meta_resultado_municipio",
-        "  id_municipio STRING,\n  rede STRING,\n" + _COLUNAS_META_RESULTADO,
-        cluster="id_municipio",
-    ),
-}
+            cluster="id_municipio",
+        ),
+        "fact_meta_resultado_brasil": _ddl(
+            "fact_meta_resultado_brasil",
+            "  rede STRING,\n" + _COLUNAS_META_RESULTADO,
+            # Sem clustering: chave `rede` tem cardinalidade ~4.
+        ),
+        "fact_meta_resultado_uf": _ddl(
+            "fact_meta_resultado_uf",
+            "  sigla_uf STRING,\n  rede STRING,\n" + _COLUNAS_META_RESULTADO,
+            cluster="sigla_uf",
+        ),
+        "fact_meta_resultado_municipio": _ddl(
+            "fact_meta_resultado_municipio",
+            "  id_municipio STRING,\n  rede STRING,\n" + _COLUNAS_META_RESULTADO,
+            cluster="id_municipio",
+        ),
+    }
+
+
+class _TableDdl(Mapping[str, str]):
+    """Registry lido sob demanda — project/dataset vêm de `get_settings()`, sem congelar no import."""
+
+    def __getitem__(self, nome: str) -> str:
+        return _table_ddl()[nome]
+
+    def __iter__(self):
+        return iter(_table_ddl())
+
+    def __len__(self) -> int:
+        return len(_table_ddl())
+
+
+TABLE_DDL: Mapping[str, str] = _TableDdl()
 
 
 @with_retry()

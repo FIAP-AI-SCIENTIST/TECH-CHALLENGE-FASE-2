@@ -15,7 +15,7 @@ _logger_initialized: bool = False
 class RunContext:
     """Contexto de uma execução do pipeline, usado para auditoria."""
     run_id: str
-    unit: str
+    step: str
     layer: str
     timestamp: datetime
     rows_read: int | None = None
@@ -37,7 +37,7 @@ class _JSONFormatter(logging.Formatter):
             "message": record.getMessage(),
         }
         # Adiciona campos extras do RunContext quando presentes
-        for key in ("run_id", "unit", "layer", "status"):
+        for key in ("run_id", "step", "layer", "status"):
             if hasattr(record, key):
                 payload[key] = getattr(record, key)
         for key in ("rows_read", "rows_written", "duration_seconds", "total_bytes_processed"):
@@ -68,7 +68,7 @@ def setup_logger(name: str = "pipeline") -> logging.Logger:
 
 
 @contextmanager
-def log_execution(unit: str, layer: str):
+def log_execution(step: str, layer: str):
     """Context manager que registra início/fim de execução com auditoria.
 
     O caller pode mutar ``run.rows_read`` e ``run.rows_written``
@@ -79,7 +79,7 @@ def log_execution(unit: str, layer: str):
     run_id = str(uuid.uuid4())
     run = RunContext(
         run_id=run_id,
-        unit=unit,
+        step=step,
         layer=layer,
         timestamp=datetime.now(timezone.utc),
     )
@@ -88,7 +88,7 @@ def log_execution(unit: str, layer: str):
         "Início da execução",
         extra={
             "run_id": run_id,
-            "unit": unit,
+            "step": step,
             "layer": layer,
         },
     )
@@ -103,7 +103,7 @@ def log_execution(unit: str, layer: str):
             f"{type(exc).__name__}: {exc}",
             extra={
                 "run_id": run_id,
-                "unit": unit,
+                "step": step,
                 "layer": layer,
                 "status": run.status,
                 "duration_seconds": run.duration_seconds,
@@ -119,7 +119,7 @@ def log_execution(unit: str, layer: str):
             "Fim da execução — sucesso",
             extra={
                 "run_id": run_id,
-                "unit": unit,
+                "step": step,
                 "layer": layer,
                 "status": run.status,
                 "rows_read": run.rows_read,
@@ -146,7 +146,7 @@ def _write_audit_safely(run: RunContext, logger: logging.Logger) -> None:
             f"Falha ao gravar auditoria: {type(audit_exc).__name__}: {audit_exc}",
             extra={
                 "run_id": run.run_id,
-                "unit": run.unit,
+                "step": run.step,
                 "layer": run.layer,
             },
         )

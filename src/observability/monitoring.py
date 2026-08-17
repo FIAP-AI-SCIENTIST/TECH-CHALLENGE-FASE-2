@@ -6,9 +6,9 @@ from datetime import datetime, timedelta, timezone
 from google.cloud import monitoring_v3
 
 from common.retry import with_retry
+from config import get_settings
 from observability.logging import setup_logger
 
-PROJECT_ID = "useful-space-277919"
 DEFAULT_SUBSCRIPTION = "alfabetizacao-streaming-consumer-sub"
 METRIC_TYPE = "pubsub.googleapis.com/subscription/num_undelivered_messages"
 MAX_ATTEMPTS = 3
@@ -28,6 +28,7 @@ def _read_undelivered_count(client: monitoring_v3.MetricServiceClient, subscript
     5 minutos. Retorna o ponto mais recente ou ``None`` se não houver
     séries.
     """
+    settings = get_settings()
     end_time = datetime.now(timezone.utc)
     start_time = end_time - timedelta(minutes=5)
 
@@ -39,7 +40,7 @@ def _read_undelivered_count(client: monitoring_v3.MetricServiceClient, subscript
 
     request = monitoring_v3.ListTimeSeriesRequest(
         {
-            "name": f"projects/{PROJECT_ID}",
+            "name": f"projects/{settings.project_id}",
             "filter": filter_expr,
             "interval": {
                 "start_time": {"seconds": int(start_time.timestamp())},
@@ -71,8 +72,9 @@ def get_consumer_lag(subscription_name: str = DEFAULT_SUBSCRIPTION) -> int | Non
     """
     logger = setup_logger()
     try:
+        settings = get_settings()
         client = monitoring_v3.MetricServiceClient()
-        subscription_path = f"projects/{PROJECT_ID}/subscriptions/{subscription_name}"
+        subscription_path = f"projects/{settings.project_id}/subscriptions/{subscription_name}"
         return _read_undelivered_count(client, subscription_path)
     except Exception as exc:
         logger.error(

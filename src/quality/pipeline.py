@@ -142,13 +142,13 @@ def _log_fim_execucao(all_results: list[QualityResult]) -> None:
             "Fim da execução — SUCCESS_WITH_DQ_FAILURE: "
             f"{len(criticas)} falha(s) CRITICA em {', '.join(sorted({r.entidade for r in criticas}))} "
             "— ver data_quality_log.",
-            extra={"unit": "Quality", "layer": "Quality", "status": "SUCCESS_WITH_DQ_FAILURE"},
+            extra={"step": "Quality", "layer": "Quality", "status": "SUCCESS_WITH_DQ_FAILURE"},
         )
         return
     log.info(
         f"Fim da execução — sucesso: {len(all_results)} checks, {len(falhas)} falha(s) não-CRITICA "
         "— ver data_quality_log.",
-        extra={"unit": "Quality", "layer": "Quality", "status": "SUCCESS"},
+        extra={"step": "Quality", "layer": "Quality", "status": "SUCCESS"},
     )
 
 
@@ -158,7 +158,7 @@ def run_all_quality_checks(frames: Mapping[str, pd.DataFrame] | None = None, *, 
     com isolamento de falha — uma entidade ilegível não impede as demais.
 
     Sem `frames`, também roda freshness (6 entidades), reconciliação Bronze→Silver (só as 3
-    entidades regulares) e integridade referencial fato×dimensão na Gold (5 pares) — U10.
+    entidades regulares) e integridade referencial fato×dimensão na Gold (5 pares).
     """
     if frames is not None:
         return run_quality_checks(frames, writer=writer)
