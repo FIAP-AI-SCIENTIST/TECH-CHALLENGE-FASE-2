@@ -230,14 +230,61 @@ def run_ddl(client: bigquery.Client, sql: str) -> None:
     client.query(sql, timeout=TIMEOUT_SECONDS).result(timeout=TIMEOUT_SECONDS)
 
 
-def ensure_table(client: bigquery.Client, nome_tabela: str) -> None:
-    """Cria `nome_tabela` com partição/clustering/constraints se estiver no registry.
+def _table_has_primary_key(client: bigquery.Client, nome_tabela: str) -> bool | None:
+    """True se a tabela existe e tem PK; False se existe sem PK; None se não existe."""
+    settings = get_settings()
+    table_ref = f"{settings.project_id}.{settings.dataset_id}.{nome_tabela}"
+    try:
+        tabela = client.get_table(table_ref)
+    except Exception:
+        return None
+    return bool(tabela.table_constraints)
 
-    Idempotente (`IF NOT EXISTS`) — sem lock: DDL de criação não corrompe
-    estado. Como os fatos declaram FK, a tabela referenciada precisa existir
-    com PK: `run_gold` materializa as dimensões antes dos fatos.
+
+def _add_primary_key(client: bigquery.Client, nome_tabela: str) -> None:
+    """Evolui uma dim existente (criada antes das constraints) adicionando a PK.
+
+    `CREATE TABLE IF NOT EXISTS` não altera tabela existente — sem este passo,
+    um dataset que já tinha as dims antigas (sem PK) fazia os fatos falharem
+    ao declarar FK. Idempotente: se a PK já existir, o ALTER falha com
+    "already exists" e é ignorado.
+    """
+    settings = get_settings()
+    sk_col = f"sk_{nome_tabela.removeprefix('dim_')}"
+    sql = (
+        f"ALTER TABLE `{settings.project_id}.{settings.dataset_id}.{nome_tabela}` "
+        f"ADD PRIMARY KEY ({sk_col}) NOT ENFORCED"
+    )
+    try:
+        run_ddl(client, sql)
+    except Exception as exc:
+        if "already exists" in str(exc).lower():
+            return
+        raise
+
+
+def ensure_table(client: bigquery.Client, nome_tabela: str) -> None:
+    """Garante que `nome_tabela` existe com o DDL do registry (partição,
+    clustering, constraints).
+
+    - Não existe → cria com o DDL completo (`CREATE TABLE IF NOT EXISTS`).
+    - Existe sem PK (dim criada antes das constraints) → adiciona a PK via
+      ALTER TABLE, para que os fatos consigam declarar FK.
+
+    Sem lock: DDL de criação/evolução não corrompe estado. Como os fatos
+    declaram FK, a tabela referenciada precisa existir com PK: `run_gold`
+    materializa as dimensões antes dos fatos.
     """
     ddl = TABLE_DDL.get(nome_tabela)
     if ddl is None:
         return
+
+    if nome_tabela.startswith("dim_"):
+        tem_pk = _table_has_primary_key(client, nome_tabela)
+        if tem_pk is False:
+            _add_primary_key(client, nome_tabela)
+            return
+        if tem_pk is True:
+            return
+
     run_ddl(client, ddl)

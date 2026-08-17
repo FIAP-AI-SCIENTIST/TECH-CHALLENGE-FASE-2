@@ -117,14 +117,34 @@ class TestEnsureTable:
         client.query.assert_called_once()
         assert client.query.call_args.args[0] == TABLE_DDL["fact_indicador_uf"]
 
-    def test_runs_ddl_for_dim(self):
-        """Dims entraram no registry (PK declarada) — deixaram de ser criadas
-        só pelo load job, porque a FK dos fatos exige a dim existente com PK."""
+    def test_runs_ddl_for_dim_when_table_does_not_exist(self):
+        """Dim nova (não existe ainda) é criada com o DDL completo (com PK)."""
         with patch("gold.schema.bigquery.Client"):
             client = MagicMock()
+            client.get_table.side_effect = Exception("NotFound")
             ensure_table(client, "dim_uf")
         client.query.assert_called_once()
         assert client.query.call_args.args[0] == TABLE_DDL["dim_uf"]
+
+    def test_evolves_existing_dim_without_pk(self):
+        """Dim que já existe sem PK (criada antes das constraints) recebe a PK
+        via ALTER TABLE — senão os fatos falham ao declarar FK."""
+        with patch("gold.schema.bigquery.Client"):
+            client = MagicMock()
+            client.get_table.return_value = MagicMock(table_constraints=None)
+            ensure_table(client, "dim_uf")
+        client.query.assert_called_once()
+        sql = client.query.call_args.args[0]
+        assert sql.startswith("ALTER TABLE")
+        assert "ADD PRIMARY KEY (sk_uf) NOT ENFORCED" in sql
+
+    def test_noop_for_dim_that_already_has_pk(self):
+        """Dim já com PK não é tocada — idempotente."""
+        with patch("gold.schema.bigquery.Client"):
+            client = MagicMock()
+            client.get_table.return_value = MagicMock(table_constraints=[MagicMock()])
+            ensure_table(client, "dim_uf")
+        client.query.assert_not_called()
 
     def test_noop_for_table_outside_registry(self):
         client = MagicMock()
