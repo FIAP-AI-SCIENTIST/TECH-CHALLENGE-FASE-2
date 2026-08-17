@@ -271,11 +271,12 @@ def build_fact_meta_resultado(scd2_table: pa.Table, chave_cols: list[str]) -> pa
     naquele ano) contra `meta_alfabetizacao_{ano}` da mesma linha (alvo
     definido especificamente para aquele ano na trajetória vigente).
 
-    Assume que todo ano da fonte abre pelo menos uma versão SCD2 — verdade
-    na prática, porque `percentual_participacao` varia ano a ano (ver
-    trade-off documentado no README: se a trajetória E a participação
-    ficarem idênticas de um ano para o outro, aquele ano específico não
-    aparece isolado aqui, herda a versão anterior).
+    Todo ano presente na fonte abre pelo menos uma versão na dimensão SCD2,
+    porque o versionamento rastreia o resultado observado
+    (`taxa_alfabetizacao`) e não apenas a trajetória de metas — dois anos
+    consecutivos só colapsam numa única versão se o resultado *e* a
+    trajetória *e* a participação forem idênticos, o que na prática não
+    ocorre. A série anual deste fato é, portanto, completa.
     """
     conn = duckdb.connect(":memory:")
     conn.register("t", scd2_table)

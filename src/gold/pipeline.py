@@ -6,6 +6,8 @@ load job) — sem merge incremental, mesma filosofia de posse total de
 partição da Bronze/Silver, aplicada aqui à tabela inteira.
 """
 
+from collections.abc import Callable
+
 import pyarrow as pa
 
 from common.lock import gcs_lock
@@ -134,24 +136,31 @@ def run_gold() -> None:
         logger.error(f"Falha lendo diretório município para dim_municipio: {type(exc).__name__}: {exc}")
         dim_municipio = None
 
-    builds = [
-        ("dim_uf", dim_uf),
-        ("dim_municipio", dim_municipio),
-        ("dim_rede", transform.build_dim_rede(uf, municipio, alunos)),
-        ("dim_serie", transform.build_dim_serie(uf, municipio, alunos)),
-        ("dim_tempo", transform.build_dim_tempo(
+    # Lista de construtores, não de tabelas já construídas: um literal de lista
+    # avalia as chamadas na hora em que é montado, o que colocaria toda a
+    # construção fora do try/except abaixo e faria uma exceção em qualquer
+    # tabela abortar a materialização de todas as outras — inclusive das que já
+    # tinham sido computadas com sucesso. Adiando a chamada para dentro do laço,
+    # cada tabela falha sozinha.
+    builds: list[tuple[str, Callable[[], pa.Table | None]]] = [
+        ("dim_uf", lambda: dim_uf),
+        ("dim_municipio", lambda: dim_municipio),
+        ("dim_rede", lambda: transform.build_dim_rede(uf, municipio, alunos)),
+        ("dim_serie", lambda: transform.build_dim_serie(uf, municipio, alunos)),
+        ("dim_tempo", lambda: transform.build_dim_tempo(
             _coletar_anos(uf, municipio, alunos, integrada, *scd2_por_entidade.values())
         )),
-        ("fact_indicador_uf", transform.build_fact_indicador_uf(uf)),
-        ("fact_indicador_municipio", transform.build_fact_indicador_municipio(municipio)),
-        ("fact_alfabetizacao_municipio", transform.build_fact_alfabetizacao_municipio(integrada)),
-        ("fact_alunos", transform.build_fact_alunos(alunos)),
+        ("fact_indicador_uf", lambda: transform.build_fact_indicador_uf(uf)),
+        ("fact_indicador_municipio", lambda: transform.build_fact_indicador_municipio(municipio)),
+        ("fact_alfabetizacao_municipio", lambda: transform.build_fact_alfabetizacao_municipio(integrada)),
+        ("fact_alunos", lambda: transform.build_fact_alunos(alunos)),
     ]
 
-    for nome_tabela, tabela in builds:
-        if tabela is None:
-            continue
+    for nome_tabela, construir in builds:
         try:
+            tabela = construir()
+            if tabela is None:
+                continue
             _materializar(nome_tabela, tabela)
         except Exception as exc:
             falhou = True
