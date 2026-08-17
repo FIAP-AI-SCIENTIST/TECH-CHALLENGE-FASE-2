@@ -6,7 +6,7 @@ import pytest
 from pydantic import BaseModel
 
 from streaming.producer import (
-    EVENT_TYPE_MODELS,
+    EVENT_TYPE_ENTITIES,
     _do_publish,
     cloud_function_entrypoint,
     gerar_evento_sintetico,
@@ -52,10 +52,26 @@ class TestGerarEventoSintetico:
             gerar_evento_sintetico("desconhecido")
 
     def test_all_declared_types_are_generatable(self):
-        for tipo_evento in EVENT_TYPE_MODELS:
+        for tipo_evento in EVENT_TYPE_ENTITIES:
             instancia, entidade = gerar_evento_sintetico(tipo_evento)
             assert instancia is not None
             assert entidade
+
+    def test_municipality_events_use_ids_present_in_dimension(self):
+        """A demo event must not create an orphan FK in the Gold.
+
+        The previous implementation generated any seven-digit number in a broad
+        range. Pydantic accepted it, but `dim_municipio` rejected it later in the
+        quality gate; the streaming event then made the full demo fail as soon as
+        the fixed Silver/Gold ordering began processing streaming Bronze.
+        """
+        from streaming.producer import _MUNICIPIOS_VALIDOS
+
+        for tipo_evento in ("medicao", "meta", "indicador"):
+            for _ in range(50):
+                instancia, entidade = gerar_evento_sintetico(tipo_evento)
+                if hasattr(instancia, "id_municipio"):
+                    assert instancia.id_municipio in _MUNICIPIOS_VALIDOS
 
 
 class TestDoPublish:
@@ -148,7 +164,7 @@ class TestCloudFunctionEntrypoint:
 
         mock_produce.assert_called_once()
         args, kwargs = mock_produce.call_args
-        assert args[0] in EVENT_TYPE_MODELS
+        assert args[0] in EVENT_TYPE_ENTITIES
         assert kwargs["n"] == 1
         assert status == 200
 

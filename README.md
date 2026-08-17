@@ -90,7 +90,7 @@ src/
 infra/                 # Terraform: infra GCP efêmera — módulos: storage, bigquery, pubsub, streaming_function, iam, budget, monitoring, apis
 infra/team-access/     # Terraform: acesso IAM humano ao console — state separado, fora do ciclo efêmero (make infra-destroy não toca aqui)
 tests/                 # Testes espelhando src/, incluindo Property-Based Testing (Hypothesis)
-docs/                  # Diagrama de arquitetura (Excalidraw + PNG) e documentos: modelo dimensional, qualidade de dados, estimativa de custos
+docs/                  # Diagrama de arquitetura (Excalidraw + PNG) e documentos: modelo dimensional, qualidade de dados, estimativa de custos, integração de fontes externas
 ```
 
 ## Pré-requisitos
