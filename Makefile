@@ -1,4 +1,4 @@
-.PHONY: install test test-contracts test-extraction test-streaming test-silver test-gold test-quality bronze silver gold quality quality-gate streaming-producer streaming-consumer clean package-producer infra-init infra-plan infra-apply infra-destroy pipeline pipeline-from-scratch
+.PHONY: install test test-contracts test-extraction test-streaming test-silver test-gold test-quality bronze silver gold quality quality-gate streaming-producer streaming-consumer clean package-producer infra-init infra-plan infra-apply infra-destroy infra-team-init infra-team-plan infra-team-apply infra-team-destroy pipeline pipeline-from-scratch
 
 # O projeto reside num CIFS/SMB share que não suporta symlinks.
 # O venv fica em $HOME/.venvs para evitar o problema.
@@ -107,9 +107,33 @@ infra-apply: package-producer
 	bash infra/apply-guard.sh
 	cd infra && terraform apply
 
-# Destrói tudo pós-demo
+# Destrói tudo pós-demo. Roda só no state principal (infra/) — o acesso humano
+# do time (infra/team-access) fica de fora de propósito, state separado, para
+# não revogar o acesso de ninguém a cada ciclo efêmero. Ver infra-team-* abaixo.
 infra-destroy:
 	cd infra && terraform destroy
+
+# --- Terraform (Acesso IAM do time — state separado, fora do ciclo efêmero) ---
+
+# Mesmo bucket de state do bootstrap.sh, prefix diferente (infra/team-access/main.tf).
+infra-team-init:
+	@if [ -z "$(PROJECT_ID)" ]; then echo "Erro: Forneça o PROJECT_ID (ex: make infra-team-init PROJECT_ID=seu-projeto, ou rode 'source .env' antes)"; exit 1; fi
+	cd infra/team-access && terraform init -backend-config="bucket=$(PROJECT_ID)-tfstate"
+
+infra-team-plan:
+	cd infra/team-access && terraform plan
+
+# Concede acesso ao console GCP para quem está em TF_VAR_team_members. Reaproveita o
+# mesmo guard do infra-apply: evita aplicar com working tree suja/branch errada, o que
+# poderia revogar sem querer o acesso de quem não está na sua cópia local do mapa.
+infra-team-apply:
+	bash infra/apply-guard.sh
+	cd infra/team-access && terraform apply
+
+# Uso raro e manual: só quando alguém sai do time de verdade. NUNCA é chamado por
+# infra-destroy/pipeline-from-scratch — offboarding é sempre uma decisão explícita.
+infra-team-destroy:
+	cd infra/team-access && terraform destroy
 
 # --- Pipeline completo (um comando só) ---
 

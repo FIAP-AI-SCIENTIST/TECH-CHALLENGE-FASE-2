@@ -3,13 +3,8 @@ project_id      = "seu-projeto-gcp"
 billing_account = "XXXXXX-XXXXXX-XXXXXX"
 alert_email     = "seu-email@exemplo.com"
 
-# Locais escolhidos deliberadamente (US != us-central1 são locations diferentes)
 bq_location     = "US"           # Multi-region: MANDATÓRIO para bater com 'basedosdados'
 gcs_location    = "us-central1"  # Regional: Constituinte da multi-region US (melhor custo)
 
-# Colegas de grupo que devem ver o projeto no console (não precisa da senha de ninguém).
-# Papéis comuns: "roles/viewer" (só visualizar) ou "roles/editor" (criar/alterar recursos).
-team_members = {
-  "colega1@gmail.com" = "roles/viewer"
-  "colega2@gmail.com" = "roles/viewer"
-}
+# Acesso humano do time (roles/viewer, roles/editor) é um state Terraform separado —
+# ver infra/team-access/terraform.tfvars.example.

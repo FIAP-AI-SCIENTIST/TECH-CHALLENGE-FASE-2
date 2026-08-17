@@ -30,9 +30,3 @@ variable "alert_email" {
   description = "Email de notificação para erros e faturamento"
   type        = string
 }
-
-variable "team_members" {
-  description = "Mapa e-mail do membro do grupo -> papel IAM no projeto GCP (ex: { \"colega@gmail.com\" = \"roles/viewer\" })"
-  type        = map(string)
-  default     = {}
-}

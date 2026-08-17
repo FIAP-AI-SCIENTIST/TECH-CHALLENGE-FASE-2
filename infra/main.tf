@@ -95,16 +95,17 @@ module "pubsub" {
   depends_on = [module.apis]
 }
 
-# 7. IAM: Service Account central da Pipeline com permissões MÍNIMAS aos módulos acima
+# 7. IAM: Service Account central da Pipeline com permissões MÍNIMAS aos módulos acima.
+# Acesso humano (team_members) NÃO mora aqui de propósito — vive num state Terraform
+# separado (infra/team-access), para que `make infra-destroy` (ciclo efêmero de demo)
+# nunca possa revogar o acesso do time ao projeto. Ver README.
 module "iam" {
   source            = "./modules/iam"
   project_id        = var.project_id
-  billing_account   = var.billing_account
   bucket_name       = module.storage.bucket_name
   dataset_id        = module.bigquery.dataset_id
   topic_name        = module.pubsub.topic_name
   subscription_name = module.pubsub.subscription_name
-  team_members      = var.team_members
 
   depends_on = [module.apis]
 }
