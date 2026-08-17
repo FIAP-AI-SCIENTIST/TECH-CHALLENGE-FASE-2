@@ -28,11 +28,14 @@ from gold.transform import (
     build_dim_municipio,
     build_dim_rede,
     build_dim_serie,
+    build_dim_tempo,
     build_dim_uf,
+    build_fact_alfabetizacao_municipio,
     build_fact_alunos,
     build_fact_indicador_municipio,
     build_fact_indicador_uf,
     build_fact_meta_resultado,
+    surrogate_key,
 )
 
 _UF_SCHEMA = to_pyarrow_schema(UFRecord)
@@ -61,7 +64,7 @@ def test_fact_indicador_municipio_preserves_row_count(records):
 def test_fact_indicador_uf_columns_subset_of_measures_and_source(records):
     tabela = to_pyarrow_table(records, _UF_SCHEMA)
     fato = build_fact_indicador_uf(tabela)
-    esperado = set(FACT_UF_MEASURES) | {"ano", "sigla_uf", "serie", "rede"}
+    esperado = set(FACT_UF_MEASURES) | {"ano", "sigla_uf", "serie", "rede", "sk_uf", "sk_serie", "sk_rede", "sk_tempo"}
     assert set(fato.column_names) <= esperado
 
 
@@ -70,7 +73,7 @@ def test_fact_alunos_preserves_row_count_and_columns(records):
     tabela = to_pyarrow_table(records, _ALUNOS_SCHEMA)
     fato = build_fact_alunos(tabela)
     assert fato.num_rows == tabela.num_rows
-    assert set(fato.column_names) <= set(FACT_ALUNOS_COLUMNS)
+    assert set(fato.column_names) <= set(FACT_ALUNOS_COLUMNS) | {"sk_municipio", "sk_serie", "sk_rede", "sk_tempo"}
 
 
 # --- Idempotência: mesma função, mesma tabela, resultado idêntico ---
@@ -242,3 +245,169 @@ def test_fact_meta_resultado_is_idempotent(tabela):
     primeira = build_fact_meta_resultado(tabela, ["rede"])
     segunda = build_fact_meta_resultado(tabela, ["rede"])
     assert primeira.to_pylist() == segunda.to_pylist()
+
+
+# --- surrogate keys: determinismo, unicidade por chave, nulidade ---
+
+
+@given(st.text(min_size=1, max_size=20))
+def test_surrogate_key_is_deterministic(chave):
+    assert surrogate_key("municipio", chave) == surrogate_key("municipio", chave)
+
+
+@given(st.integers(min_value=1900, max_value=2100))
+def test_surrogate_key_accepts_int_natural_key(ano):
+    """`dim_tempo` usa o ano (INT64) como chave natural — a SK não pode
+    assumir que a chave é string."""
+    assert surrogate_key("tempo", ano) == surrogate_key("tempo", ano)
+    assert isinstance(surrogate_key("tempo", ano), int)
+
+
+@given(st.lists(st.from_regex(r"[0-9]{7}", fullmatch=True), min_size=1, max_size=20, unique=True))
+def test_surrogate_key_unique_per_distinct_key(chaves):
+    sks = [surrogate_key("municipio", c) for c in chaves]
+    assert len(set(sks)) == len(chaves)
+
+
+@given(st_municipio_dim_source())
+def test_dim_municipio_sk_unique_and_matches_natural_key(tabela):
+    """Unicidade: uma SK por id_municipio distinto; e a SK é a função hash da
+    chave natural (não um sequencial da ordem de leitura)."""
+    dim = build_dim_municipio(tabela)
+    sks = dim.column("sk_municipio").to_pylist()
+    ids = dim.column("id_municipio").to_pylist()
+    assert len(set(sks)) == len(set(ids)) == dim.num_rows
+    for sk, id_mun in zip(sks, ids):
+        assert sk == surrogate_key("municipio", id_mun)
+
+
+# --- dim_tempo: completude, idempotência, metamorfose ---
+
+
+_st_anos = st.lists(st.one_of(st.none(), st.integers(min_value=2010, max_value=2035)), max_size=20)
+
+
+@given(_st_anos)
+def test_dim_tempo_covers_every_input_year(anos):
+    """Completude: todo ano não-nulo da entrada está na dimensão."""
+    dim = build_dim_tempo(anos)
+    cobertura = set(dim.column("ano").to_pylist())
+    assert {a for a in anos if a is not None} <= cobertura
+    assert set(META_ANOS) <= cobertura
+
+
+@given(_st_anos)
+def test_dim_tempo_grain_is_unique(anos):
+    dim = build_dim_tempo(anos)
+    valores = dim.column("ano").to_pylist()
+    assert len(valores) == len(set(valores))
+
+
+@given(_st_anos)
+def test_dim_tempo_is_idempotent(anos):
+    assert build_dim_tempo(anos).to_pylist() == build_dim_tempo(anos).to_pylist()
+
+
+@given(_st_anos)
+def test_dim_tempo_duplicating_years_changes_nothing(anos):
+    """Metamórfica: duplicar os anos de entrada não altera a dimensão."""
+    assert build_dim_tempo(anos + anos).to_pylist() == build_dim_tempo(anos).to_pylist()
+
+
+@given(_st_anos)
+def test_dim_tempo_order_of_input_is_irrelevant(anos):
+    """Metamórfica: permutar a entrada não altera a saída (ela é ordenada)."""
+    reverso = list(reversed(anos))
+    assert build_dim_tempo(reverso).to_pylist() == build_dim_tempo(anos).to_pylist()
+
+
+# --- Integridade referencial por construção: fato x dim da mesma fonte ---
+
+
+@given(st.lists(st_municipio_record(), min_size=1, max_size=15))
+def test_fact_indicador_municipio_sks_exist_in_dim_built_from_same_keys(records):
+    """Toda sk_municipio/sk_tempo não-nula do fato existe na dimensão
+    construída sobre as mesmas chaves naturais — a FK nunca fica órfã quando
+    fato e dim derivam da mesma fonte."""
+    tabela = to_pyarrow_table(records, _MUNICIPIO_SCHEMA)
+    fato = build_fact_indicador_municipio(tabela)
+
+    ids = [i for i in tabela.column("id_municipio").to_pylist() if i is not None]
+    diretorio = pa.table({
+        "id_municipio": ids,
+        "nome": ["M"] * len(ids),
+        "sigla_uf": ["SP"] * len(ids),
+        "nome_regiao": ["Sudeste"] * len(ids),
+        "capital_uf": pa.array([1] * len(ids), type=pa.int64()),
+    })
+    dim_municipio = build_dim_municipio(diretorio)
+    dim_tempo = build_dim_tempo(tabela.column("ano").to_pylist())
+
+    sks_municipio_validas = set(dim_municipio.column("sk_municipio").to_pylist())
+    sks_tempo_validas = set(dim_tempo.column("sk_tempo").to_pylist())
+    for linha in fato.to_pylist():
+        if linha["sk_municipio"] is not None:
+            assert linha["sk_municipio"] in sks_municipio_validas
+        if linha["sk_tempo"] is not None:
+            assert linha["sk_tempo"] in sks_tempo_validas
+
+
+# --- fact_alfabetizacao_municipio: completude, idempotência, derivação ---
+
+
+@st.composite
+def st_integrada_source(draw):
+    """Linhas no formato da tabela integrada da Silver (grão + medidas + meta)."""
+    n = draw(st.integers(min_value=1, max_value=10))
+    linhas = []
+    for _ in range(n):
+        ano = draw(st.integers(min_value=2019, max_value=2030))
+        tem_meta = draw(st.booleans()) and ano in META_ANOS
+        linhas.append({
+            "ano": ano,
+            "id_municipio": draw(st.from_regex(r"[0-9]{7}", fullmatch=True)),
+            "rede": draw(st.sampled_from(["0", "1", "2"])),
+            "serie": "2",
+            "taxa_alfabetizacao": draw(st.floats(min_value=0.0, max_value=100.0, allow_nan=False, allow_infinity=False)),
+            "media_portugues": draw(st.floats(min_value=400.0, max_value=900.0, allow_nan=False, allow_infinity=False)),
+            "meta_indicador": draw(st.floats(min_value=0.0, max_value=100.0, allow_nan=False, allow_infinity=False)) if tem_meta else None,
+            "percentual_participacao": draw(st.floats(min_value=0.0, max_value=100.0, allow_nan=False, allow_infinity=False)) if tem_meta else None,
+            "nivel_alfabetizacao": draw(st.integers(min_value=0, max_value=3)) if tem_meta else None,
+        })
+    return pa.Table.from_pylist(linhas)
+
+
+@given(st_integrada_source())
+def test_fact_alfabetizacao_municipio_preserves_row_count(tabela):
+    fato = build_fact_alfabetizacao_municipio(tabela)
+    assert fato.num_rows == tabela.num_rows
+
+
+@given(st_integrada_source())
+def test_fact_alfabetizacao_municipio_gap_and_atingiu_meta_are_derived(tabela):
+    fato = build_fact_alfabetizacao_municipio(tabela)
+    for linha in fato.to_pylist():
+        meta = linha["meta_indicador"]
+        taxa = linha["taxa_alfabetizacao"]
+        if meta is None:
+            assert linha["gap_pontos"] is None
+            assert linha["atingiu_meta"] is None
+        else:
+            assert linha["gap_pontos"] == taxa - meta
+            assert linha["atingiu_meta"] == (taxa >= meta)
+
+
+@given(st_integrada_source())
+def test_fact_alfabetizacao_municipio_is_idempotent(tabela):
+    primeira = build_fact_alfabetizacao_municipio(tabela)
+    segunda = build_fact_alfabetizacao_municipio(tabela)
+    assert primeira.to_pylist() == segunda.to_pylist()
+
+
+@given(st_integrada_source())
+def test_fact_alfabetizacao_municipio_row_order_is_irrelevant(tabela):
+    """Metamórfica: permutar as linhas de entrada não altera o conjunto de
+    saída (SKs incluídas) — só a ordem física das linhas."""
+    invertida = tabela.take(pa.array(list(reversed(range(tabela.num_rows))), type=pa.int64()))
+    conjunto = lambda t: sorted((tuple(sorted(r.items())) for r in t.to_pylist()), key=repr)
+    assert conjunto(build_fact_alfabetizacao_municipio(tabela)) == conjunto(build_fact_alfabetizacao_municipio(invertida))
