@@ -5,6 +5,7 @@ from collections import defaultdict
 from collections.abc import Iterable, Iterator
 
 from google.cloud import bigquery
+from pydantic import ValidationError
 
 from bronze import reader as bronze_reader
 from bronze import writer as bronze_writer
@@ -21,7 +22,7 @@ from contracts.models import (
 )
 from contracts.schema_mapper import to_pyarrow_schema
 from contracts.serialization import to_pyarrow_table
-from observability.logging import log_execution
+from observability.logging import log_execution, setup_logger
 
 BATCH_THRESHOLD = 500_000
 BATCH_SIZE = 50_000
@@ -74,9 +75,41 @@ def _split_into_batches(rows, total_rows) -> Iterable[list]:
     return [list(rows)]
 
 
+# Teto de logs individuais de rejeição por lote: problema sistêmico (lote
+# inteiro sujo) não pode inundar o stdout — o resumo final sempre registra o total.
+MAX_REJEITADAS_LOG = 10
+
+
 def _instantiate_records(row_batch, modelo) -> list:
-    """Valida cada linha crua do BigQuery contra o Contrato (Pydantic) da entidade."""
-    return [modelo(**dict(row)) for row in row_batch]
+    """Valida cada linha crua do BigQuery contra o Contrato (Pydantic) da entidade.
+
+    Isolamento por linha: uma linha fora do contrato (ex: valor fora da faixa
+    declarada no modelo) é descartada e registrada, sem derrubar o lote —
+    antes, a primeira ValidationError abortava a extração inteira da entidade.
+    ``rows_read`` no audit passa a significar "linhas válidas" (as rejeitadas
+    aparecem só no log), mantendo a comparação rows_read x rows_written íntegra.
+    """
+    logger = setup_logger()
+    instancias = []
+    rejeitadas = 0
+    for row in row_batch:
+        dados = dict(row)
+        try:
+            instancias.append(modelo(**dados))
+        except ValidationError as exc:
+            rejeitadas += 1
+            if rejeitadas <= MAX_REJEITADAS_LOG:
+                chave = {k: dados[k] for k in ("ano", "sigla_uf", "id_municipio", "id_aluno") if dados.get(k) is not None}
+                logger.warning(
+                    "Linha rejeitada pelo contrato %s %s: %s",
+                    modelo.__name__, chave, exc.errors(include_url=False),
+                )
+    if rejeitadas:
+        logger.warning(
+            "%s: %d linha(s) descartada(s) no lote; %d válida(s) seguem para a Bronze.",
+            modelo.__name__, rejeitadas, len(instancias),
+        )
+    return instancias
 
 
 def _group_by_ano(instancias: list) -> dict:

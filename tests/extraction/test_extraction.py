@@ -14,12 +14,14 @@ from extraction.extraction import (
     ENTITY_TABLE_MAP,
     MAX_BYTES_BILLED,
     _do_query,
+    _instantiate_records,
     compute_incremental_years,
     extract_entity,
     extract_full,
     extract_incremental,
     batched,
 )
+from contracts.models import UFRecord
 from common.lock import LockHeldError, gcs_lock
 
 
@@ -135,6 +137,33 @@ class TestBatched:
         batches = list(batched(gen(), size=2))
         assert len(batches) == 3
         assert len(batches[-1]) == 1
+
+
+class TestInstantiateRecords:
+    """Verifica isolamento de falha por linha na validação do contrato:
+    uma linha fora da faixa é descartada sem derrubar o lote."""
+
+    def test_isolates_bad_row(self, caplog):
+        rows = [
+            {"ano": 2023, "sigla_uf": "SP", "taxa_alfabetizacao": 86.21},
+            {"ano": 2023, "sigla_uf": "RJ", "taxa_alfabetizacao": 150.0},  # fora da faixa 0-100
+            {"ano": 2024, "sigla_uf": "MG", "taxa_alfabetizacao": 70.0},
+        ]
+        with caplog.at_level("WARNING", logger="pipeline"):
+            instancias = _instantiate_records(rows, UFRecord)
+        assert [i.sigla_uf for i in instancias] == ["SP", "MG"]
+        assert "1 linha(s) descartada(s)" in caplog.text
+        assert "RJ" in caplog.text  # linha rejeitada identificada no log
+
+    def test_all_rows_invalid_returns_empty_without_raising(self):
+        rows = [{"ano": 1999}, {"ano": 3000}]  # fora da banda de sanidade 2000-2100
+        assert _instantiate_records(rows, UFRecord) == []
+
+    def test_none_values_pass_range_constraints(self):
+        """Campo Optional com ge/le aceita None — ausência de valor não é violação."""
+        instancias = _instantiate_records([{"ano": None, "taxa_alfabetizacao": None}], UFRecord)
+        assert len(instancias) == 1
+        assert instancias[0].taxa_alfabetizacao is None
 
 
 class TestExtractFull:
