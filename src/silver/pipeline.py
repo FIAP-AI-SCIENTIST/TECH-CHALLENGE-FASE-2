@@ -116,9 +116,12 @@ def run_silver(entidade: str) -> None:
             run.rows_written = rows_written
             run.total_bytes_processed = total_bytes
 
-            # Data Quality (Data Quality): valida o frame deduplicado ainda em memória,
-            # após a escrita — falha CRITICA não desfaz a escrita já feita
-            # (business-rules regras 6/7); marca a execução na auditoria.
+            # Valida o frame deduplicado ainda em memória, depois da escrita: a
+            # regra é que uma falha CRITICA sinaliza a execução na auditoria e
+            # deixa evidência na tabela de qualidade, mas nunca desfaz o que já
+            # foi gravado nem interrompe as entidades seguintes — a Silver é
+            # reconstruída por inteiro a cada execução, então reprocessar
+            # corrige o dado sem precisar de rollback.
             from quality.pipeline import run_entity_quality_checks
 
             dq_results = run_entity_quality_checks(entidade, dedupada)

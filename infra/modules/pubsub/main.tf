@@ -2,6 +2,7 @@
 resource "google_pubsub_topic" "streaming_events" {
   name    = "alfabetizacao-streaming-events"
   project = var.project_id
+  labels  = var.labels
 }
 
 # Assinatura (Subscription) para consumir os eventos e gravá-los no Bronze (Streaming Consumer)
@@ -17,4 +18,6 @@ resource "google_pubsub_subscription" "streaming_consumer" {
 
   # Acknowledgement deadline configurado para acomodar latência básica de IO e validação estrutural (Pydantic)
   ack_deadline_seconds = 20
+
+  labels = var.labels
 }

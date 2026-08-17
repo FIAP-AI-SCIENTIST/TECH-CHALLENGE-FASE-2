@@ -33,6 +33,6 @@ where = ["src"]
 filterwarnings = [
     # Great Expectations 1.20 avisa sobre `result_format` configurado no Validator em vez do
     # runtime da suite — cosmético (a suite ainda valida corretamente), mas gera dezenas de
-    # UserWarning por rodada de testes, poluindo o log de CI. Achado A6 da revisão de aderência.
+    # UserWarning por rodada de testes, poluindo o log de execução da suíte.
     "ignore:.*result_format.*:UserWarning",
 ]

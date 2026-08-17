@@ -33,8 +33,9 @@ from streaming.producer import cloud_function_entrypoint as handler
 EOF
 
 # Versões pinadas ao ambiente local no momento do build — evita que o buildpack do GCP resolva
-# uma versão diferente da testada localmente (achado A7 da revisão de aderência). Cai para o
-# floor solto só se o pacote não estiver instalado localmente (build "a frio", sem venv).
+# uma versão diferente da testada localmente, o que faria a função em produção rodar sobre
+# dependências que nenhum teste exercitou. Cai para o floor solto só se o pacote não estiver
+# instalado localmente (build "a frio", sem venv).
 PYTHON_BIN="${PYTHON:-python3}"
 PIN() {
   "$PYTHON_BIN" -c "

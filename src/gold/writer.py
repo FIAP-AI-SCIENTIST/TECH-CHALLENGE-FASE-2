@@ -38,7 +38,7 @@ def write_table(nome_tabela: str, table: pa.Table) -> int:
     gold_schema.ensure_table(client, nome_tabela)
 
     buffer = io.BytesIO()
-    pq.write_table(table, buffer)
+    pq.write_table(table, buffer, compression="snappy")
 
     job_config = bigquery.LoadJobConfig(
         source_format=bigquery.SourceFormat.PARQUET,

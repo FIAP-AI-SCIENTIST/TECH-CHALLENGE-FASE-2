@@ -46,7 +46,7 @@ def write_entity(entidade: str, chave: str, table: pa.Table) -> int:
     bucket = client.bucket(get_settings().bucket_name)
 
     buffer = io.BytesIO()
-    pq.write_table(table, buffer)
+    pq.write_table(table, buffer, compression="snappy")
     buffer.seek(0)
 
     blob = bucket.blob(f"{prefix}part-0.parquet")
@@ -62,7 +62,7 @@ def write_scd2_table(entidade: str, table: pa.Table) -> int:
     bucket = client.bucket(get_settings().bucket_name)
 
     buffer = io.BytesIO()
-    pq.write_table(table, buffer)
+    pq.write_table(table, buffer, compression="snappy")
     buffer.seek(0)
 
     blob = bucket.blob(scd2_path(entidade))

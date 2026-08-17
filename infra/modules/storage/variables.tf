@@ -7,3 +7,9 @@ variable "location" {
   description = "Região do bucket GCS (ex: us-central1)"
   type        = string
 }
+
+variable "labels" {
+  description = "Rótulos de atribuição de custo aplicados ao bucket"
+  type        = map(string)
+  default     = {}
+}

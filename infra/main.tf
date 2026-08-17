@@ -27,6 +27,19 @@ provider "google" {
   billing_project       = var.project_id
 }
 
+# Rótulos aplicados a todo recurso faturável. São a base da atribuição de custo
+# no relatório de faturamento do GCP: com eles é possível abrir o gasto por
+# camada da pipeline e por componente, em vez de olhar só o total do projeto.
+# Sem rótulo, o relatório de custo mostra "BigQuery: R$ x" e não responde qual
+# parte da pipeline gerou o gasto.
+locals {
+  cost_labels = {
+    projeto        = "alfabetizacao"
+    ambiente       = "demo"
+    gerenciado_por = "terraform"
+  }
+}
+
 # 1. Habilitar APIs (Storage, BigQuery, PubSub, etc.)
 module "apis" {
   source     = "./modules/apis"
@@ -58,6 +71,7 @@ module "storage" {
   source     = "./modules/storage"
   project_id = var.project_id
   location   = var.gcs_location
+  labels     = local.cost_labels
 
   depends_on = [module.apis]
 }
@@ -67,6 +81,7 @@ module "bigquery" {
   source     = "./modules/bigquery"
   project_id = var.project_id
   location   = var.bq_location
+  labels     = local.cost_labels
 
   depends_on = [module.apis]
 }
@@ -75,6 +90,7 @@ module "bigquery" {
 module "pubsub" {
   source     = "./modules/pubsub"
   project_id = var.project_id
+  labels     = local.cost_labels
 
   depends_on = [module.apis]
 }
