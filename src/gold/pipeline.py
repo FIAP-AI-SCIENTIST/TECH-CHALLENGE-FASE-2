@@ -16,7 +16,7 @@ from gold import marts, transform
 from gold.writer import write_table
 from observability.logging import log_execution, setup_logger
 from silver import reader as silver_reader
-from silver.reference import get_diretorio_municipio, get_diretorio_uf
+from silver.reference import get_atlas_idhm, get_diretorio_municipio, get_diretorio_uf, merge_idhm_into_diretorio
 from silver.transform import ENTIDADE_INTEGRADA, normalize_key
 
 ENTIDADES_META = ("meta_alfabetizacao_brasil", "meta_alfabetizacao_uf", "meta_alfabetizacao_municipio")
@@ -70,16 +70,25 @@ def _diretorio_municipio_to_arrow(diretorio: dict[str, dict]) -> pa.Table:
             "sigla_uf": pa.array([], type=pa.string()),
             "nome_regiao": pa.array([], type=pa.string()),
             "capital_uf": pa.array([], type=pa.int64()),
+            "idhm": pa.array([], type=pa.float64()),
+            "idhm_educacao": pa.array([], type=pa.float64()),
+            "idhm_renda": pa.array([], type=pa.float64()),
+            "idhm_longevidade": pa.array([], type=pa.float64()),
         })
     # Só `id_municipio` tem tipo forçado (chave normalizada); o resto segue o
     # tipo do diretório — `capital_uf` é INT64 na fonte, igual ao que a Silver
-    # já monta em `_municipio_dict_to_table`.
+    # já monta em `_municipio_dict_to_table`. IDHM via `.get()`: aditivo, o
+    # diretório é válido mesmo sem o Atlas fundido.
     return pa.table({
         "id_municipio": pa.array([id_mun for id_mun, _ in itens], type=pa.string()),
         "nome": [d["nome"] for _, d in itens],
         "sigla_uf": [d["sigla_uf"] for _, d in itens],
         "nome_regiao": [d["nome_regiao"] for _, d in itens],
         "capital_uf": [d["capital_uf"] for _, d in itens],
+        "idhm": pa.array([d.get("idhm") for _, d in itens], type=pa.float64()),
+        "idhm_educacao": pa.array([d.get("idhm_educacao") for _, d in itens], type=pa.float64()),
+        "idhm_renda": pa.array([d.get("idhm_renda") for _, d in itens], type=pa.float64()),
+        "idhm_longevidade": pa.array([d.get("idhm_longevidade") for _, d in itens], type=pa.float64()),
     })
 
 
@@ -130,6 +139,8 @@ def run_gold() -> None:
 
     try:
         diretorio_municipio, _ = get_diretorio_municipio()
+        atlas_idhm, _ = get_atlas_idhm()
+        diretorio_municipio = merge_idhm_into_diretorio(diretorio_municipio, atlas_idhm)
         dim_municipio = transform.build_dim_municipio(_diretorio_municipio_to_arrow(diretorio_municipio))
     except Exception as exc:
         falhou = True

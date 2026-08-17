@@ -39,7 +39,7 @@ _VARIAVEIS = (
 
 
 @contextmanager
-def ambiente(**valores: str) -> Generator[None]:
+def ambiente(**valores: str) -> Generator[None, None, None]:
     """Ambiente determinístico: descarta toda variável reconhecida por `Settings`
     (inclusive as que o `conftest.py` define para a suíte) e aplica só as passadas."""
     base = {chave: valor for chave, valor in os.environ.items() if chave not in _VARIAVEIS}

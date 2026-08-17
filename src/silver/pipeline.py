@@ -55,8 +55,15 @@ def _load_referencias(entidade: str) -> tuple[dict, int]:
         total_bytes += b or 0
 
     if entidade in ("municipio", "meta_alfabetizacao_municipio"):
-        referencias["diretorio_municipio"], b = reference.get_diretorio_municipio()
+        diretorio_municipio, b = reference.get_diretorio_municipio()
         total_bytes += b or 0
+
+        # Atlas do Desenvolvimento Humano (IDHM) — enriquecimento fundido no
+        # mesmo dicionário de município, não uma segunda tabela de lookup.
+        atlas_idhm, b = reference.get_atlas_idhm()
+        total_bytes += b or 0
+
+        referencias["diretorio_municipio"] = reference.merge_idhm_into_diretorio(diretorio_municipio, atlas_idhm)
 
     return referencias, total_bytes
 

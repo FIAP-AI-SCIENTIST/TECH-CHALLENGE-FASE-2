@@ -124,7 +124,8 @@ def _table_ddl() -> dict[str, str]:
         "dim_municipio": _ddl(
             "dim_municipio",
             "  sk_municipio INT64 NOT NULL,\n  id_municipio STRING,\n  nome STRING,\n"
-            "  sigla_uf STRING,\n  nome_regiao STRING,\n  capital_uf INT64",
+            "  sigla_uf STRING,\n  nome_regiao STRING,\n  capital_uf INT64,\n"
+            "  idhm FLOAT64,\n  idhm_educacao FLOAT64,\n  idhm_renda FLOAT64,\n  idhm_longevidade FLOAT64",
             constraints=[_pk("sk_municipio")],
             partition=False,
         ),
