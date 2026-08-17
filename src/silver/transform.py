@@ -69,6 +69,17 @@ SCD2_NATURAL_KEYS: dict[str, list[str]] = {
 }
 
 # Colunas rastreadas pelo SCD2 — mudança em qualquer uma gera nova versão.
+#
+# Inclui o resultado observado (`taxa_alfabetizacao`, `nivel_alfabetizacao`) e não
+# apenas a trajetória de metas: quando só a trajetória era rastreada, um ano cujo
+# alvo repetia o do ano anterior não abria versão nova, e `apply_scd2` mantinha a
+# linha antiga inteira — descartando a taxa de alfabetização daquele ano junto.
+# Como o resultado observado é exatamente o que os fatos de meta x resultado
+# comparam, o efeito era um fato com valor defasado e sem linha para o ano.
+#
+# `nivel_alfabetizacao` só existe na meta municipal; nas outras duas entidades
+# `rastreados()` lê `None` dos dois lados da comparação, então a coluna extra é
+# inócua ali e não exige uma lista por entidade.
 SCD2_TRACKED_COLUMNS = [
     "meta_alfabetizacao_2024",
     "meta_alfabetizacao_2025",
@@ -78,6 +89,8 @@ SCD2_TRACKED_COLUMNS = [
     "meta_alfabetizacao_2029",
     "meta_alfabetizacao_2030",
     "percentual_participacao",
+    "taxa_alfabetizacao",
+    "nivel_alfabetizacao",
 ]
 
 _ALUNOS_BOOL_COLUMNS = ("alfabetizado", "presenca", "preenchimento_caderno")

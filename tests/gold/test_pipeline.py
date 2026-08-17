@@ -130,6 +130,46 @@ class TestRunGold:
         # As 3 views foram tentadas, mesmo com a do meio falhando.
         assert mock_create_view.call_count == 3
 
+    def test_build_failure_is_isolated_and_marks_run_failed(self):
+        """Uma tabela que falha ao ser construída não impede a materialização
+        das demais.
+
+        Regressão: enquanto a lista de tabelas era um literal com as chamadas de
+        construção já resolvidas, todas eram avaliadas antes do try/except do
+        laço de escrita — uma exceção em qualquer construtor abortava a Gold
+        inteira, inclusive as dimensões que já tinham sido computadas com
+        sucesso. A falha ainda tem que ser fatal no fim da execução, mas só
+        depois de tentar todas as outras tabelas.
+        """
+        import pytest
+
+        uf = pa.table({
+            "ano": [2023], "sigla_uf": ["SP"], "rede": ["1"], "serie": ["2"],
+            "rede_desc": ["Federal"], "serie_desc": ["2o ano"], "sigla_uf_nome": ["São Paulo"],
+            "taxa_alfabetizacao": [70.0],
+        })
+
+        with patch("gold.pipeline.get_diretorio_uf", return_value=({"SP": "São Paulo"}, 1024)), \
+             patch("gold.pipeline.get_diretorio_municipio", return_value=({}, 0)), \
+             patch("gold.pipeline.silver_reader.read_entity", return_value=uf), \
+             patch("gold.pipeline.silver_reader.read_scd2_table_raw", return_value=None), \
+             patch("gold.pipeline.gcs_lock", new=_mock_lock()), \
+             patch("gold.pipeline.log_execution", _mock_log_execution()), \
+             _mock_create_view(), \
+             patch("gold.pipeline.transform.build_fact_indicador_uf",
+                   side_effect=ValueError("construtor quebrado simulado")), \
+             patch("gold.pipeline.write_table", return_value=1) as mock_write:
+            with pytest.raises(RuntimeError):
+                run_gold()
+
+        tabelas_escritas = {c.args[0] for c in mock_write.call_args_list}
+        # A tabela cujo construtor falhou não é escrita...
+        assert "fact_indicador_uf" not in tabelas_escritas
+        # ...e nenhuma das outras é perdida por causa dela, nem as dimensões
+        # computadas antes dela na ordem de materialização.
+        assert {"dim_uf", "dim_rede", "dim_serie", "dim_tempo"} <= tabelas_escritas
+        assert "fact_indicador_municipio" in tabelas_escritas
+
     def test_reads_diretorio_through_real_reference_contract(self):
         """Regressão: `get_diretorio_*` devolve `(dict, bytes)`, não `dict`.
 

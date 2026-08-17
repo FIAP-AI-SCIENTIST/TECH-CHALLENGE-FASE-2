@@ -165,9 +165,10 @@ class TestApplyScd2:
         pa.field("meta_alfabetizacao_2029", pa.float64()),
         pa.field("meta_alfabetizacao_2030", pa.float64()),
         pa.field("percentual_participacao", pa.float64()),
+        pa.field("taxa_alfabetizacao", pa.float64()),
     ])
 
-    def _make_incoming(self, sigla_uf="SP", rede="0", meta_2024=50.0):
+    def _make_incoming(self, sigla_uf="SP", rede="0", meta_2024=50.0, taxa=40.0):
         return pa.Table.from_pylist([{
             "sigla_uf": sigla_uf,
             "rede": rede,
@@ -179,6 +180,7 @@ class TestApplyScd2:
             "meta_alfabetizacao_2029": 80.0,
             "meta_alfabetizacao_2030": 100.0,
             "percentual_participacao": 90.0,
+            "taxa_alfabetizacao": taxa,
         }], schema=self._SCHEMA)
 
     def test_new_key_opens_first_version(self):
@@ -203,6 +205,39 @@ class TestApplyScd2:
         row = segunda.to_pylist()[0]
         assert row["valid_from"] == 2023  # continua a versao original
         assert row["is_current"] is True
+
+    def test_changed_result_alone_opens_new_version(self):
+        """Trajetória de metas e participação idênticas, resultado observado
+        diferente: tem que abrir versão nova.
+
+        Regressão: enquanto só a trajetória de metas era comparada, este caso
+        caía no ramo "sem mudança" e a linha do ano corrente era descartada
+        inteira — a cadeia ficava com a taxa de alfabetização do ano anterior e
+        sem nenhuma linha para o ano novo, defasando o fato de meta x resultado
+        exatamente na medida que ele existe para comparar.
+        """
+        dimension_vazia = pa.Table.from_pylist([], schema=self._SCHEMA)
+        primeira = apply_scd2(
+            "meta_alfabetizacao_uf", dimension_vazia, self._make_incoming(taxa=40.0), ano=2023
+        )
+
+        segunda = apply_scd2(
+            "meta_alfabetizacao_uf", primeira, self._make_incoming(taxa=65.0), ano=2024
+        )
+
+        assert segunda.num_rows == 2
+        rows = sorted(segunda.to_pylist(), key=lambda r: r["valid_from"])
+        assert rows[0]["valid_from"] == 2023
+        assert rows[0]["valid_to"] == 2024
+        assert rows[0]["is_current"] is False
+        assert rows[0]["taxa_alfabetizacao"] == 40.0
+        assert rows[1]["valid_from"] == 2024
+        assert rows[1]["valid_to"] is None
+        assert rows[1]["is_current"] is True
+        assert rows[1]["taxa_alfabetizacao"] == 65.0
+        # A trajetória de metas continua idêntica nas duas versões — o que
+        # mudou foi só o resultado.
+        assert rows[0]["meta_alfabetizacao_2030"] == rows[1]["meta_alfabetizacao_2030"]
 
     def test_changed_value_closes_old_and_opens_new_version(self):
         dimension_vazia = pa.Table.from_pylist([], schema=self._SCHEMA)
