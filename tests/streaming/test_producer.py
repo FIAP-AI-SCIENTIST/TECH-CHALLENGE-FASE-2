@@ -57,6 +57,22 @@ class TestGerarEventoSintetico:
             assert instancia is not None
             assert entidade
 
+    def test_municipality_events_use_ids_present_in_dimension(self):
+        """A demo event must not create an orphan FK in the Gold.
+
+        The previous implementation generated any seven-digit number in a broad
+        range. Pydantic accepted it, but `dim_municipio` rejected it later in the
+        quality gate; the streaming event then made the full demo fail as soon as
+        the fixed Silver/Gold ordering began processing streaming Bronze.
+        """
+        from streaming.producer import _MUNICIPIOS_VALIDOS
+
+        for tipo_evento in ("medicao", "meta", "indicador"):
+            for _ in range(50):
+                instancia, entidade = gerar_evento_sintetico(tipo_evento)
+                if hasattr(instancia, "id_municipio"):
+                    assert instancia.id_municipio in _MUNICIPIOS_VALIDOS
+
 
 class TestDoPublish:
     """Verifica retry/timeout na publicação real."""

@@ -34,6 +34,25 @@ EVENT_TYPE_ENTITIES: dict[str, list[str]] = {
 
 _UFS = ["SP", "RJ", "MG", "BA", "CE", "PR", "PE", "RS"]
 
+# Códigos IBGE reais e estáveis. O gerador sintético precisa produzir eventos
+# que também sejam aceitos pelos FKs da Gold: sortear qualquer inteiro de 7
+# dígitos cria uma linha válida no Pydantic, mas órfã em `dim_municipio`, fazendo
+# o `quality-gate` bloquear a demo. Estes oito municípios foram verificados no
+# diretório oficial carregado em `dim_municipio` (rodada GCP de 2026-08-17), um
+# por UF da lista acima. Não consultamos BigQuery por evento: o Producer roda em
+# Cloud Function e uma consulta por mensagem seria mais lenta e mais cara que a
+# própria publicação.
+_MUNICIPIOS_VALIDOS = [
+    "3550308",  # São Paulo/SP
+    "3304557",  # Rio de Janeiro/RJ
+    "3106200",  # Belo Horizonte/MG
+    "2927408",  # Salvador/BA
+    "2304400",  # Fortaleza/CE
+    "4106902",  # Curitiba/PR
+    "2611606",  # Recife/PE
+    "4314902",  # Porto Alegre/RS
+]
+
 
 def gerar_evento_sintetico(tipo_evento: str):
     """Gera uma instância válida (contrato Pydantic já existente) para o tipo de evento pedido.
@@ -56,7 +75,7 @@ def gerar_evento_sintetico(tipo_evento: str):
     if modelo is DadosAlunosRecord:
         instancia = DadosAlunosRecord(
             ano=ano,
-            id_municipio=str(random.randint(1100000, 5399999)),
+            id_municipio=random.choice(_MUNICIPIOS_VALIDOS),
             id_escola=str(uuid.uuid4()),
             id_aluno=str(uuid.uuid4()),
             caderno=str(random.randint(1, 4)),
@@ -86,7 +105,7 @@ def gerar_evento_sintetico(tipo_evento: str):
     elif modelo is MetaAlfabetizacaoMunicipioRecord:
         instancia = MetaAlfabetizacaoMunicipioRecord(
             ano=ano,
-            id_municipio=str(random.randint(1100000, 5399999)),
+            id_municipio=random.choice(_MUNICIPIOS_VALIDOS),
             nivel_alfabetizacao=random.choice([0, 1]),
             rede=str(random.randint(0, 6)),
             taxa_alfabetizacao=round(random.uniform(0.0, 100.0), 2),
@@ -120,7 +139,7 @@ def gerar_evento_sintetico(tipo_evento: str):
     else:  # MunicipioRecord
         instancia = MunicipioRecord(
             ano=ano,
-            id_municipio=str(random.randint(1100000, 5399999)),
+            id_municipio=random.choice(_MUNICIPIOS_VALIDOS),
             serie="2",
             rede=str(random.randint(0, 6)),
             taxa_alfabetizacao=round(random.uniform(0.0, 100.0), 2),
