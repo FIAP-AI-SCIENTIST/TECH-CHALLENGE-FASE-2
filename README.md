@@ -1,6 +1,6 @@
 # Pipeline Híbrido de Análise da Alfabetização no Brasil
 
-Tech Challenge Fase 2 (Pós FIAP) — pipeline de dados híbrido (batch + streaming) sobre GCP (Bronze, streaming e Gold) + DuckDB local (Silver) para o **Indicador Criança Alfabetizada** (INEP, Pesquisa Alfabetiza Brasil 2023), fonte pública `basedosdados.br_inep_avaliacao_alfabetizacao` (BigQuery público).
+Tech Challenge Fase 2 (Pós FIAP) — pipeline de dados híbrido (batch + streaming) sobre GCP (Bronze, streaming e Gold), com a Silver processada por DuckDB embarcado e persistida no GCS, para o **Indicador Criança Alfabetizada** (INEP, Pesquisa Alfabetiza Brasil 2023), fonte pública `basedosdados.br_inep_avaliacao_alfabetizacao` (BigQuery público).
 
 ## Contexto de negócio
 
@@ -10,7 +10,7 @@ Este projeto simula o trabalho de um time de engenharia de dados de uma organiza
 
 ## Arquitetura
 
-Arquitetura Lambda (camada batch + camada streaming convergindo na mesma camada Bronze), seguindo o padrão Medalhão (Bronze → Silver → Gold): GCP para Bronze, streaming e Gold, DuckDB local para a Silver (justificativa na seção de trade-offs).
+Arquitetura Lambda (camada batch + camada streaming convergindo na mesma camada Bronze), seguindo o padrão Medalhão (Bronze → Silver → Gold): GCP para Bronze, streaming e Gold; a Silver é processada com DuckDB embarcado no mesmo processo Python e persistida em Parquet no GCS (justificativa na seção de trade-offs).
 
 ![Arquitetura do pipeline](docs/arquitetura.png)
 
@@ -28,7 +28,7 @@ Arquitetura Lambda (camada batch + camada streaming convergindo na mesma camada 
 
 | Camada | Tecnologia | Justificativa |
 |---|---|---|
-| Extração/Streaming | Python + `google-cloud-bigquery`/`google-cloud-pubsub` | Sem Spark/Airflow self-hosted — volume da fonte (~4M linhas na maior entidade) não justifica cluster distribuído; Python simples cobre o caso |
+| Extração/Streaming | Python + `google-cloud-bigquery`/`google-cloud-pubsub` | Sem Spark/Airflow self-hosted — volume da fonte (~4M linhas na maior entidade) não justifica cluster distribuído (ver "Spark fora do desenho" nos trade-offs abaixo); Python single-node cobre o caso |
 | Formato de dados | Parquet particionado (hive-style) | Colunar, compressão eficiente, leitura seletiva por partição — custo de storage e de query menor |
 | Streaming transporte | Pub/Sub (não Kafka) | Ver seção de trade-offs abaixo |
 | Contratos de dados | Pydantic | Único schema por entidade compartilhado entre extração batch, producer e consumer streaming — evita drift de schema entre os dois caminhos que convergem na Bronze |
@@ -41,6 +41,8 @@ Arquitetura Lambda (camada batch + camada streaming convergindo na mesma camada 
 **Cloud única (GCP), não multi-cloud.** A fonte de dados (Base dos Dados/INEP) mora nativamente no BigQuery — não existe equivalente na AWS/Azure. Mesmo com uma camada de abstração multi-cloud, a extração continuaria presa ao GCP; portabilizar o resto seria engenharia sem retorno. Tirar os dados do BigQuery público para processar em outra nuvem geraria custo real de egress, o que colide direto com o orçamento free-tier do projeto. Terraform também não abstrai providers de forma nativa — "agnóstico" significaria manter 2-3 implementações paralelas por módulo, triplicando a superfície de bugs para um requisito que o desafio não pede (pede escolha justificada, não portabilidade).
 
 **Pub/Sub em vez de Kafka.** O padrão publish/subscribe (tópico → subscription/consumer group, semântica at-least-once, monitoramento de lag) é o mesmo, mas Kafka self-hosted (ou mesmo um serviço gerenciado como Confluent Cloud/MSK) não tem free tier real, e o projeto já está comprometido com um único provedor gerenciado (GCP). Pub/Sub cobre publish/subscribe, consumer lag e entrega at-least-once dentro do orçamento zero.
+
+**Spark fora do desenho (processamento single-node de propósito).** O volume da fonte não paga um engine distribuído: a maior entidade tem ~4M de linhas e as demais ficam na casa das dezenas de milhares — carga que uma única máquina processa em segundos. Nessa escala o gargalo é I/O de rede com a fonte, não CPU paralela, e Spark não remove I/O. O processamento pesado já está delegado aos engines certos para o tamanho do problema: o scan e as agregações sobre a fonte rodam dentro do próprio BigQuery (que é um engine distribuído — só que gerenciado e dentro do free tier), e as transformações set-based da Silver/Gold rodam em DuckDB no mesmo processo Python, sem cluster para provisionar. O que se evita é concreto: mesmo o Dataproc Serverless — que tem free tier (500 DCU-hora e 2000 GB-hora de shuffle por mês) e em modo batch é efêmero (o cluster sobe, processa e morre, sem faturar 24/7) — cobraria por job algo que o pipeline já resolve de graça, e tunar executores, partições e shuffle é complexidade operacional sem retorno nesse volume. Se o volume crescer ordens de grandeza (ex.: censo escolar nacional no grão do aluno, centenas de milhões de linhas), o caminho natural é Dataproc Serverless ou empurrar as transformações para dentro do BigQuery — a decisão é revisitável, não um veto à ferramenta.
 
 **Sem camada de staging antes da Bronze.** Como a fonte já é uma tabela estruturada e confiável do BigQuery público (não um arquivo solto ou API instável), a extração aplica o contrato Pydantic direto na leitura e grava já na Bronze — uma camada de staging intermediária existiria só para reformatar algo que já chega formatado.
 
@@ -63,7 +65,7 @@ Isso preserva o histórico da Bronze sem depender de transações, ao custo de n
 - **Free tier estrito**: nenhum serviço sem free tier generoso entra no design (sem Dataflow, Composer ou Dataproc); GCS, BigQuery (1TB de query/mês), Pub/Sub (10GB/mês) e Cloud Functions (2M invocações/mês) cobrem o volume do projeto.
 - **Infraestrutura efêmera**: todo o Terraform é desenhado para subir e cair sem sujeira — bucket com `force_destroy`, dataset com `delete_contents_on_destroy = true`, tabela de auditoria sem `deletion_protection`. Suba só para testar/demonstrar, rode `make infra-destroy` depois. A única exceção é o bucket de state (`<project>-tfstate`), criado fora do Terraform pelo `bootstrap.sh` justamente por ser pré-requisito dele — some com ele à mão quando encerrar o projeto de vez.
 - **Egress**: co-localizar o processamento na mesma nuvem da fonte (BigQuery público) evita custo de transferência entre nuvens — ver trade-off de cloud única acima.
-- **Ciclo de vida do dado bruto**: o bucket do data lake degrada o storage conforme o dado envelhece (30+ dias → Nearline, 180+ dias → Coldline) e aborta multipart uploads interrompidos após 1 dia — a Bronze é efêmera por design (a Silver é a camada de replay), então o histórico bruto não vira custo morto em Standard.
+- **Ciclo de vida do dado bruto**: o bucket do data lake degrada o storage conforme o dado envelhece (30+ dias → Nearline, 180+ dias → Coldline) e aborta multipart uploads interrompidos após 1 dia. O acesso ao dado bruto antigo é raro — a Bronze é a camada de replay (a Silver é recomputada a partir dela, e a própria Bronze pode ser reextraída da fonte pública) — então o histórico bruto não vira custo morto em Standard.
 - **Estimativa de custos**: a planilha completa (recurso × consumo × free tier × preço, com o pior caso) está em [docs/estimativa-de-custos.md](docs/estimativa-de-custos.md).
 - **Gold recomputada, não incremental**: com o volume atual (dezenas de milhares de linhas nas maiores entidades), reler a Silver inteira e sobrescrever a Gold por completo (`WRITE_TRUNCATE`) é mais simples e mais barato em engenharia do que rastrear o que mudou — o custo de processamento fica dentro do free tier de BigQuery (1TB de query/mês cobre esse load job com folga). Se o volume crescer a ponto de o full-recompute pesar no orçamento, merge incremental por partição de `ano` é o próximo passo natural.
 - **Least privilege como controle de custo indireto**: a service account central (`alfabetizacao-pipeline-sa`) recebe papéis com escopo de recurso sempre que o GCP oferece um (Storage Object Admin no bucket específico, BigQuery Data Editor no dataset específico, Pub/Sub Publisher/Subscriber no tópico/subscription específicos). Dois papéis não têm equivalente com escopo de recurso no IAM do GCP e ficam necessariamente no nível do projeto: `roles/bigquery.jobUser` (rodar query/insert é uma operação de projeto, não de dataset) e `roles/monitoring.viewer` (ler a métrica de Consumer Lag). Nada além disso — reduz a superfície de uso indevido de cota.
@@ -207,4 +209,4 @@ WHERE severidade = 'CRITICA' AND passou = FALSE
 ORDER BY timestamp DESC;
 ```
 
-As capturas da rodada completa em GCP (`make pipeline-from-scratch`) — auditoria por camada, veredito do gate e estado final das tabelas — serão anexadas nesta seção.
+Rodada completa executada em GCP em 2026-08-17 (`make pipeline-from-scratch`): destroy de 30 recursos → apply de 36 → Bronze (6 entidades, **3.902.927 linhas**, `rows_read == rows_written` em todas — zero rejeições de contrato em dados reais) → Silver (dedup por chave de negócio: `meta_alfabetizacao_uf` 81 → 80, `meta_alfabetizacao_municipio` 10.704 → 10.698) → Gold (5 dimensões + 7 fatos + 3 marts) → streaming (Producer ×3 + Consumer) → **quality-gate bloqueante: 76 checks, 0 falhas** (212 vereditos persistidos na janela, todos `passou = true`). O Cloud Scheduler disparou o Producer sozinho a cada 10 min durante a rodada (cron `*/10 * * * *` funcionando sem intervenção). Na janela da rodada, o BigQuery registrou 94 query jobs — 37 servidos pelo cache de resultados — totalizando 125,8 MB cobrados (~US$ 0,0008); os números por etapa e o cenário de scan frio (~259 MiB → ~US$ 0,0016/rodada) estão em [docs/estimativa-de-custos.md](docs/estimativa-de-custos.md#medições-reais-rodada-de-2026-08-17).

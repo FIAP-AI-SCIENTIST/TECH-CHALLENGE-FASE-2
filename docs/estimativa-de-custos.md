@@ -31,7 +31,27 @@ Volumes com piso garantido pelo gate de qualidade (`src/quality/rules.py`):
 | `uf`, `meta_alfabetizacao_uf` | 27 |
 | `meta_alfabetizacao_brasil` | 1 |
 
-Na ordem de ~10⁶ linhas e algumas centenas de MB em Parquet (Bronze + Silver + Gold) em todos os anos. Por execução full (extração do dataset público + leituras Silver/Gold/qualidade), o volume escaneado fica na ordem de algumas centenas de MB — o valor medido por execução está em `pipeline_audit_log` (`total_bytes_processed` por passo).
+Na ordem de ~10⁶ linhas e algumas centenas de MB em Parquet (Bronze + Silver + Gold) em todos os anos. Por execução full (extração do dataset público + leituras Silver/Gold/qualidade), o volume escaneado fica na ordem de algumas centenas de MB — o valor medido por execução está em `pipeline_audit_log` (`total_bytes_processed` por passo), com a ressalva do cache de resultados explicada na seção de medições abaixo.
+
+## Medições reais (rodada de 2026-08-17)
+
+Rodada completa de `make pipeline-from-scratch` (destroy de 30 recursos → apply de 36 → batch + streaming + gate), medida em `pipeline_audit_log`, `data_quality_log` e `INFORMATION_SCHEMA.JOBS`:
+
+| Etapa | Entidade | Linhas lidas | Linhas escritas | Duração |
+|---|---|---:|---:|---:|
+| Bronze | uf | 145 | 145 | 7,3 s |
+| Bronze | municipio | 23.995 | 23.995 | 11,7 s |
+| Bronze | meta_alfabetizacao_brasil | 3 | 3 | 8,7 s |
+| Bronze | meta_alfabetizacao_uf | 81 | 81 | 8,0 s |
+| Bronze | meta_alfabetizacao_municipio | 10.704 | 10.704 | 10,0 s |
+| Bronze | alunos | 3.867.999 | 3.867.999 | 985,3 s |
+| Silver | 6 entidades | 3.902.927 | 3.902.920 | ~278 s (total) |
+| Gold | 5 dims + 7 fatos + 3 marts | — | — | ~161 s (total) |
+| Qualidade | 2 passes completos × 76 checks + inline Silver | — | — | 212 vereditos, 0 falhas |
+
+- **Total extraído**: 3.902.927 linhas; `rows_read == rows_written` nas 6 extrações — zero rejeições de contrato em dados reais. Na Silver, a deduplicação por chave de negócio aparece: `meta_alfabetizacao_uf` 81 → 80 e `meta_alfabetizacao_municipio` 10.704 → 10.698.
+- **Bytes processados = 0 nas extrações — não é bug, é cache.** As queries contra a fonte pública foram servidas pelo cache de resultados do BigQuery (a fonte é imutável entre rodadas e o cache vale ~24 h, independente do ciclo destroy/apply das tabelas do projeto). Medição agregada da janela via `INFORMATION_SCHEMA.JOBS`: 94 query jobs, 37 servidos de cache, 31,6 MB processados / 125,8 MB cobrados → **~US$ 0,0008** na rodada.
+- **Cenário frio (sem cache)**: o scan completo das 6 tabelas da fonte soma **≈ 259 MiB** (`alunos` 256,1 MiB + `municipio` 1,7 + `meta_alfabetizacao_municipio` 1,1; demais ≈ 0), medido em `__TABLES__` do dataset público. A US$ 6,25/TiB, uma rodada fria custa **~US$ 0,0016**; o free tier de 1 TiB/mês comporta **~4.000 rodadas completas**.
 
 ## Estimativa por serviço
 
@@ -42,17 +62,17 @@ Na ordem de ~10⁶ linhas e algumas centenas de MB em Parquet (Bronze + Silver +
 | Cloud Storage | Algumas GB | 50 GB/mês (Standard, US) | **R$ 0** |
 | Pub/Sub | Eventos sintéticos em KB | 10 GiB de throughput + 24h de retenção | **R$ 0** |
 | Cloud Function 2nd gen | 144 invocações/dia × 256 MB × ~2s ≈ 290 vCPU-s/dia | Cloud Run (180k vCPU-s/dia, 360k GB-s/dia) | **R$ 0** |
-| Cloud Scheduler | 144 jobs/dia | 50 jobs/dia | **~US$ 11/mês (~R$ 60)** |
+| Cloud Scheduler | 1 job (`*/10 * * * *`) | 3 jobs/mês | **R$ 0** |
 | IAM, monitoramento, orçamento | — | — | R$ 0 |
 
-### Cloud Scheduler — único custo previsível
+### Cloud Scheduler — cobrança por job, não por execução
 
-O schedule do producer é a cada 10 minutos (144 jobs/dia). Acima dos 50 jobs/dia do free tier: 94 jobs × US$ 0,004 ≈ **US$ 0,38/dia ≈ US$ 11/mês**. A escolha foi consciente: granularidade de streaming mais alta. Se o custo quisesse ser exatamente zero, um schedule horário (24 jobs/dia) caberia no free tier; o alerta de orçamento de R$ 1 é a salvaguarda contra essa estimativa estar errada.
+O Cloud Scheduler cobra por **job agendado** (a definição), não por execução: US$ 0,10/job/mês, com free tier de 3 jobs/mês por conta de faturamento. O projeto tem exatamente **1 job** (o que dispara o producer a cada 10 min) — as ~4.300 execuções/mês que ele gera não são cobradas pelo Scheduler (o alvo, Cloud Function, tem seu próprio free tier, já contabilizado acima). Custo efetivo: **R$ 0**.
 
 ## Total mensal
 
-- **Esperado: ~R$ 0** (tudo dentro dos free tiers).
-- **Pior caso: ~R$ 60/mês** (apenas Cloud Scheduler; nenhum outro serviço deve gerar custo).
+- **Esperado: R$ 0** (tudo dentro dos free tiers, incluindo o Scheduler).
+- **Pior caso: centavos de US$/mês** (storage BigQuery/GCS se os dados persistirem além da demonstração; o alerta de orçamento de R$ 1 é a salvaguarda contra qualquer desvio dessa estimativa).
 
 ## Como verificar no ambiente real
 
