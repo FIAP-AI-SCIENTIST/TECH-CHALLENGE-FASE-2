@@ -159,6 +159,17 @@ pipeline: infra-apply
 # Silver que prova o caminho: ela aparece como uma segunda execução em
 # pipeline_audit_log, com rows_read maior que a primeira.
 #
+# CADÊNCIA — este reprocesso pertence ao ciclo de demonstração, NÃO é gatilho por
+# micro-batch. Reprocessar a cada lote consumido seria recomputar o histórico
+# inteiro por algumas dezenas de eventos: `run_silver` lê toda a Bronze da
+# entidade e reescreve as partições `ano=` (o SCD2 é replayado do zero, por
+# idempotência), e a Gold rematerializa as 12 tabelas com WRITE_TRUNCATE. Medido
+# na rodada real de 2026-08-17: Silver ~4m23s (3,9M linhas) + Gold ~2m56s por
+# passada. O streaming alimenta a Bronze continuamente; as camadas derivadas
+# recomputam por ciclo. Baixar essa latência sem recomputar tudo exige
+# merge/upsert incremental na Silver, que é o argumento a favor de um open table
+# format (Iceberg/Delta) — hoje fora do desenho, registrado no backlog.
+#
 # Fecha com o gate bloqueante sobre o estado final: num ciclo from-scratch o
 # que se quer é o veredito — se houver falha CRITICA, o Make sai com erro e a
 # evidência fica em data_quality_log. Para a versão que só registra e segue,
