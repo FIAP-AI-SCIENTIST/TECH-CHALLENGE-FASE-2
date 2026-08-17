@@ -64,6 +64,7 @@ Isso preserva o histórico da Bronze sem depender de transações, ao custo de n
 - **Orçamento**: `google_billing_budget` monitorando a conta de faturamento, alerta em 50%/90%/100% de R$ 1,00 — o GCP não aceita um valor de budget zero, então R$ 1,00 é o menor teto configurável para sinalizar qualquer gasto que fuja do free tier, não um limite de consumo esperado.
 - **Free tier estrito**: nenhum serviço sem free tier generoso entra no design (sem Dataflow, Composer ou Dataproc); GCS, BigQuery (1TB de query/mês), Pub/Sub (10GB/mês) e Cloud Functions (2M invocações/mês) cobrem o volume do projeto.
 - **Infraestrutura efêmera**: todo o Terraform é desenhado para subir e cair sem sujeira — bucket com `force_destroy`, dataset com `delete_contents_on_destroy = true`, tabela de auditoria sem `deletion_protection`. Suba só para testar/demonstrar, rode `make infra-destroy` depois. A única exceção é o bucket de state (`<project>-tfstate`), criado fora do Terraform pelo `bootstrap.sh` justamente por ser pré-requisito dele — some com ele à mão quando encerrar o projeto de vez.
+- **Acesso humano fora do ciclo efêmero**: `google_project_iam_member`/`google_billing_account_iam_member` do time (`roles/viewer`/`roles/editor`) moram num state Terraform separado (`infra/team-access`), não no state principal (`infra/`). Só o segundo é ephemeral — `make infra-destroy` roda `terraform destroy` sem `-target`, então qualquer IAM binding que esteja no mesmo state seria destruído junto; separar o state é a única forma de garantir que derrubar a infra de demo nunca revoga o acesso do grupo ao projeto.
 - **Egress**: co-localizar o processamento na mesma nuvem da fonte (BigQuery público) evita custo de transferência entre nuvens — ver trade-off de cloud única acima.
 - **Ciclo de vida do dado bruto**: o bucket do data lake degrada o storage conforme o dado envelhece (30+ dias → Nearline, 180+ dias → Coldline) e aborta multipart uploads interrompidos após 1 dia. O acesso ao dado bruto antigo é raro — a Bronze é a camada de replay (a Silver é recomputada a partir dela, e a própria Bronze pode ser reextraída da fonte pública) — então o histórico bruto não vira custo morto em Standard.
 - **Estimativa de custos**: a planilha completa (recurso × consumo × free tier × preço, com o pior caso) está em [docs/estimativa-de-custos.md](docs/estimativa-de-custos.md).
@@ -84,7 +85,8 @@ src/
 ├── quality/           # Data Quality: registry declarativo, checks Great Expectations, gate e evidência
 ├── common/            # Retry compartilhado (backoff exponencial) e lock exclusivo baseado em GCS
 └── observability/     # Logging estruturado, auditoria BigQuery e monitoramento (Consumer Lag)
-infra/                 # Terraform: toda a infra GCP (efêmera) — módulos: storage, bigquery, pubsub, streaming_function, iam, budget, monitoring, apis
+infra/                 # Terraform: infra GCP efêmera — módulos: storage, bigquery, pubsub, streaming_function, iam, budget, monitoring, apis
+infra/team-access/     # Terraform: acesso IAM humano ao console — state separado, fora do ciclo efêmero (make infra-destroy não toca aqui)
 tests/                 # Testes espelhando src/, incluindo Property-Based Testing (Hypothesis)
 docs/                  # Diagrama de arquitetura (Excalidraw + PNG) e documentos: modelo dimensional, qualidade de dados, estimativa de custos
 ```
@@ -106,17 +108,37 @@ cp .env.example .env   # preencher com os valores do projeto (nunca commitar o .
 
 Edite o `.env` e preencha `TF_VAR_billing_account`, `TF_VAR_alert_email` e `TF_VAR_team_members` com os valores do projeto.
 
-> ⚠️ **Importante:** `team_members` é gerenciado como um mapa único pelo
-> Terraform. Se o seu `.env` tiver só o seu e-mail nesse mapa e você rodar
-> `apply`/`destroy`, o Terraform **revoga o acesso de todo mundo que não
-> estiver no seu mapa**. Use sempre a cópia mais recente combinada com o
-> grupo, não invente a sua.
+> ⚠️ **Importante:** dentro de `infra/team-access`, `team_members` é
+> gerenciado como um mapa único pelo Terraform. Se o seu `.env` tiver só o
+> seu e-mail nesse mapa e você rodar `infra-team-apply`/`infra-team-destroy`,
+> o Terraform **revoga o acesso de todo mundo que não estiver no seu mapa**.
+> Use sempre a cópia mais recente combinada com o grupo, não invente a sua.
+> Isso **não afeta** `infra-apply`/`infra-destroy` (state principal) — os
+> dois states são isolados de propósito, ver passo 2 abaixo.
 
 ```bash
 source .env
 ```
 
-## 2. Subir a infraestrutura
+## 2. Acesso do time ao console (opcional, uma vez por projeto)
+
+Acesso humano ao console (`roles/viewer`/`roles/editor`) vive num state
+Terraform separado, `infra/team-access`, isolado do state principal
+(`infra/`) de propósito: assim, destruir a infra efêmera de demo
+(`make infra-destroy`) nunca revoga o acesso de ninguém ao projeto — os dois
+states não compartilham recurso nenhum. Rode uma vez por projeto (ou sempre
+que `TF_VAR_team_members` mudar):
+
+```bash
+make infra-team-init PROJECT_ID=$TF_VAR_project_id   # só na primeira vez
+make infra-team-plan
+make infra-team-apply
+```
+
+Para revogar o acesso de alguém que saiu do time de vez (raro e manual —
+nunca disparado automaticamente): `make infra-team-destroy`.
+
+## 3. Subir a infraestrutura
 
 O Terraform guarda o state num bucket GCS (state locking, porque mais de uma pessoa aplica no mesmo projeto). Esse bucket é pré-requisito do próprio `terraform init`, então não dá para o Terraform criá-lo — `bootstrap.sh` resolve o ovo-e-galinha criando o bucket e habilitando as duas APIs (Resource Manager e IAM) sem as quais o `refresh` trava antes de conseguir habilitar as demais.
 
@@ -130,7 +152,7 @@ make infra-apply                                # cria dataset BigQuery, bucket 
 
 `infra-apply` só roda a partir da branch `main`, com a working tree limpa e sincronizada com `origin/main` (`infra/apply-guard.sh` bloqueia isso de propósito, para evitar duas pessoas aplicando mudanças conflitantes em paralelo no mesmo projeto GCP compartilhado).
 
-## 3. Rodar e testar
+## 4. Rodar e testar
 
 ```bash
 make install                                     # cria venv e instala o pacote em modo dev
@@ -152,13 +174,15 @@ Em produção, o Producer roda sozinho via Cloud Scheduler → Cloud Function (s
 
 **Por que só o caminho de streaming é agendado.** A extração batch (`make bronze`) roda sob demanda de propósito: a fonte é uma avaliação censitária anual do INEP e a extração incremental é particionada por ano (`extract_incremental` só busca `ano > max(ano já na Bronze)`). Agendar um job diário ou horário contra uma base que muda uma vez por ano gasta cota para não encontrar nada. O gatilho natural é a publicação de uma nova safra, que é um evento manual — quando isso deixar de valer (ou quando a Silver precisar de recomputação periódica), o caminho pronto é um Cloud Run Job com o mesmo Cloud Scheduler que já dispara o Producer.
 
-## 4. Destruir a infraestrutura — sempre que terminar de testar
+## 5. Destruir a infraestrutura — sempre que terminar de testar
 
 ```bash
 make infra-destroy
 ```
 
 Todos os recursos gerenciados pelo Terraform foram desenhados para serem efêmeros de propósito — o `destroy` funciona limpo, sem sujeira. O bucket de state (`<project>-tfstate`) fica de fora, porque é ele que guarda o próprio state; remova à mão (`gcloud storage rm -r gs://$TF_VAR_project_id-tfstate`) só quando encerrar o projeto de vez. Não deixe a infra provisionada depois do seu teste; o orçamento de R$ 1,00 é só um alerta, não um limite automático que corta o projeto.
+
+`infra-destroy` roda só no state principal (`infra/`) — o acesso humano do time (`infra/team-access`, passo 2) fica de fora de propósito: destruir a infra de demo não revoga o acesso de ninguém ao projeto.
 
 ## Qualidade e testes
 
