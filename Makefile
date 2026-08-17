@@ -122,9 +122,21 @@ pipeline: infra-apply
 	$(MAKE) gold
 	$(MAKE) quality
 
-# Ciclo completo a partir do zero: derruba a infra atual, recria e roda tudo.
+# Ciclo completo a partir do zero: derruba a infra atual, recria e roda tudo —
+# as camadas batch (Bronze → Silver → Gold → Quality, via `pipeline`) e em
+# seguida o streaming: o producer publica eventos sintéticos de cada tipo e o
+# consumer grava o micro-batch na Bronze já com o event time (data_evento).
+# Fecha com o gate bloqueante sobre o estado final: num ciclo from-scratch o
+# que se quer é o veredito — se houver falha CRITICA, o Make sai com erro e a
+# evidência fica em data_quality_log. Para a versão que só registra e segue,
+# use `make pipeline`.
 # infra-destroy fica fora de `pipeline` de propósito — destruir não deve ser
 # implícito no comando do dia a dia.
 pipeline-from-scratch:
 	$(MAKE) infra-destroy
 	$(MAKE) pipeline
+	$(MAKE) streaming-producer TIPO=indicador N=2
+	$(MAKE) streaming-producer TIPO=meta N=2
+	$(MAKE) streaming-producer TIPO=medicao N=2
+	$(MAKE) streaming-consumer
+	$(MAKE) quality-gate
