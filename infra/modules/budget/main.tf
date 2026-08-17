@@ -1,5 +1,5 @@
 # Budget Alert: configurado com R$ 1,00 para garantir que sejamos notificados
-# no mínimo gasto técnico que desvie do Free Tier, cumprindo NFR01.
+# no mínimo gasto técnico que desvie do Free Tier.
 # GCP não permite amounts vazios ou zero.
 resource "google_billing_budget" "budget_alert" {
   billing_account = var.billing_account

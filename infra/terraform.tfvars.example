@@ -1,5 +1,5 @@
 # Substitua pelos valores da sua conta Google Cloud
-project_id      = "useful-space-277919"
+project_id      = "seu-projeto-gcp"
 billing_account = "XXXXXX-XXXXXX-XXXXXX"
 alert_email     = "seu-email@exemplo.com"
 

@@ -1,5 +1,5 @@
 # Reaproveita o bucket datalake (prefixo _deploy/) para guardar o zip do código-fonte —
-# sem criar um bucket dedicado só para isso (decisão de Infrastructure Design da unit).
+# sem criar um bucket dedicado só para isso (decisão de projeto da infraestrutura).
 
 # O nome do objeto inclui o hash do zip: sempre que infra/scripts/package_producer.sh
 # gerar um zip novo, o nome muda, o que força o Cloud Function a fazer redeploy.

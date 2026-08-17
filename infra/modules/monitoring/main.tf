@@ -21,7 +21,7 @@ resource "google_monitoring_alert_policy" "pipeline_error_alert" {
   conditions {
     display_name = "Log matching ERROR"
     condition_matched_log {
-      # Captura qualquer log de projeto com severidade ERROR (NFR03: Observabilidade básica).
+      # Captura qualquer log de projeto com severidade ERROR (observabilidade).
       filter = "severity >= ERROR"
     }
   }

@@ -47,7 +47,7 @@ Arquitetura Lambda (camada batch + camada streaming convergindo na mesma camada 
 - **Batch** é dono da partição `ano=`: `clear_partition` limpa o prefixo **uma única vez por `(entidade, ano)` no início do run**, nunca dentro do loop de lotes, e cada lote grava seu próprio `part-{i}.parquet`. Reextrair um ano substitui aquele ano inteiro, de forma determinística.
 - **Streaming** não é dono da partição `data_ingestao=`: ela é compartilhada por todos os micro-batches do dia, então o consumer **nunca** limpa nada e nomeia o arquivo pelo `run_id` da execução (`part-{run_id}.parquet`), o que torna a colisão com um run anterior impossível.
 
-Isso preserva o histórico da Bronze sem depender de transações, ao custo de não ter merge/upsert. Se a Silver (SCD Tipo 2) precisar de merge incremental mais sofisticado, um open table format entra como candidato natural nessa unit futura.
+Isso preserva o histórico da Bronze sem depender de transações, ao custo de não ter merge/upsert. Se a Silver (SCD Tipo 2) precisar de merge incremental mais sofisticado, um open table format entra como candidato natural para uma evolução futura.
 
 **NoSQL fora do MVP.** Pelo CAP Theorem e pela decisão de persistência poliglota, o projeto não introduz um banco NoSQL de serving no MVP — o BigQuery (Gold) já cobre consulta analítica dimensional. Um caso de uso de IA aplicada (ex.: buscar municípios com perfil educacional similar via embeddings, servidos por um banco vetorial) fica registrado como extensão natural pós-MVP, não como lacuna do design atual.
 
@@ -152,7 +152,7 @@ Todos os recursos gerenciados pelo Terraform foram desenhados para serem efêmer
 
 ## Qualidade e testes
 
-Suíte de testes unitários e de contrato por camada (`tests/`), incluindo Property-Based Testing (Hypothesis) nas funções puras de contratos (round-trip de serialização, invariantes de schema). Validação de qualidade de dados (duplicidade, nulos, chaves, consistência) fica para a unit de Data Quality, sobre Silver/Gold.
+Suíte de testes unitários e de contrato por camada (`tests/`), incluindo Property-Based Testing (Hypothesis) nas funções puras de contratos (round-trip de serialização, invariantes de schema) e da configuração de ambiente. A validação de qualidade de dados (duplicidade, valores ausentes, chaves de relacionamento e consistência entre tabelas) roda sobre Silver e Gold via `make quality`, com o resultado de cada verificação persistido na tabela `alfabetizacao_analytics.data_quality_log`.
 
 ## Aplicação em IA
 

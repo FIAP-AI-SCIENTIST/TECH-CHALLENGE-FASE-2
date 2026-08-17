@@ -5,10 +5,10 @@ resource "google_storage_bucket" "datalake" {
   location = var.location
 
   # CRÍTICO: sem isso, o `terraform destroy` falha na hora da demo se o bucket tiver arquivos.
-  # Essencial para garantir a infraestrutura efêmera (NFR01).
+  # Essencial para garantir a infraestrutura efêmera.
   force_destroy = true
 
-  # Garante que o IAM será aplicado apenas no nível do bucket (NFR04: Segurança)
+  # Garante que o IAM será aplicado apenas no nível do bucket (segurança)
   uniform_bucket_level_access = true
 
   # Previne que os arquivos fiquem expostos na internet (Sem acessos públicos acidentais)
