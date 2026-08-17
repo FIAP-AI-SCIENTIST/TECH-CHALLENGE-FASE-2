@@ -1,4 +1,4 @@
-.PHONY: install test test-contracts test-extraction test-streaming test-silver test-gold test-quality bronze silver gold quality streaming-producer streaming-consumer clean package-producer infra-init infra-plan infra-apply infra-destroy pipeline pipeline-from-scratch
+.PHONY: install test test-contracts test-extraction test-streaming test-silver test-gold test-quality bronze silver gold quality quality-gate streaming-producer streaming-consumer clean package-producer infra-init infra-plan infra-apply infra-destroy pipeline pipeline-from-scratch
 
 # O projeto reside num CIFS/SMB share que não suporta symlinks.
 # O venv fica em $HOME/.venvs para evitar o problema.
@@ -55,8 +55,17 @@ gold: install
 
 # --- Data Quality (Great Expectations sobre Silver/Gold) ---
 
+# Registra a evidência e segue: sai com código zero mesmo com falha CRITICA.
 quality: install
 	$(PYTHON) -c "from quality.pipeline import run_all_quality_checks; run_all_quality_checks()"
+
+# Mesmos checks, mas bloqueante: sai com código diferente de zero se houver falha
+# CRITICA. Alvo separado de propósito — encadear o gate dentro de `pipeline` faria
+# um problema de dado interromper a demonstração depois de todas as camadas já
+# terem sido materializadas, quando o que se quer ali é ver o relatório inteiro.
+quality-gate: install
+	$(PYTHON) -c "from quality.pipeline import run_all_quality_checks; run_all_quality_checks(fail_on_critical=True)"
+
 # --- Streaming (Producer + Consumer) ---
 
 # Uso: make streaming-producer TIPO=meta N=5

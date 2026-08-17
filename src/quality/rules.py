@@ -40,7 +40,18 @@ COLUMN_PATTERNS = {
     "alfabetizacao_municipio_integrado": {"id_municipio": r"^\d{7}$"},
     "uf": {"sigla_uf": r"^[A-Z]{2}$"}, "meta_alfabetizacao_uf": {"sigla_uf": r"^[A-Z]{2}$"},
 }
-SEVERIDADE = {"duplicidade": "CRITICA", "chave_relacionamento": "CRITICA", "schema": "CRITICA", "formato_coluna": "CRITICA"}
+# Severidade por tipo de check. CRITICA é o que caracteriza dado inutilizável a
+# jusante: chave duplicada quebra o grão, chave órfã quebra o join com a dimensão,
+# schema/formato divergente quebra a leitura, e coluna obrigatória nula abaixo do
+# limiar torna a linha inútil para qualquer agregação por aquela chave. O que não
+# está aqui vira AVISO: sinaliza degradação sem invalidar a carga.
+SEVERIDADE = {
+    "duplicidade": "CRITICA",
+    "chave_relacionamento": "CRITICA",
+    "schema": "CRITICA",
+    "formato_coluna": "CRITICA",
+    "valores_ausentes": "CRITICA",
+}
 # Pares fato x coluna x dimensao x coluna_dim verificados por check_referential_integrity,
 # sobre as surrogate keys declaradas como FK no DDL da Gold. So as FKs territoriais:
 # sk_rede/sk_serie/sk_tempo sao tautologicas (dim_rede/dim_serie sao a uniao dos proprios

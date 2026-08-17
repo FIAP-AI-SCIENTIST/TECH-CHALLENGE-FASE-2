@@ -14,6 +14,8 @@ import pyarrow as pa
 
 from bronze import reader as bronze_reader
 
+from silver.transform import ENTIDADE_INTEGRADA
+
 from . import gold_reader, rules
 from observability.logging import setup_logger
 from .checks import check_data_freshness, check_reconciliation, check_referential_integrity, check_row_count
@@ -23,6 +25,11 @@ from .writer import write_results
 
 logger = logging.getLogger(__name__)
 
+# Entidades validadas pelo gate standalone. Inclui a tabela integrada: ela tem
+# regras próprias declaradas no registry (colunas obrigatórias, faixa, formato,
+# volumetria), e sem estar nesta lista essas regras só rodavam no hook inline da
+# Silver — o gate rodado à parte não cobria justamente a tabela que resulta do
+# cruzamento entre fontes.
 ENTIDADES = [
     "uf",
     "municipio",
@@ -30,7 +37,18 @@ ENTIDADES = [
     "meta_alfabetizacao_uf",
     "meta_alfabetizacao_municipio",
     "alunos",
+    ENTIDADE_INTEGRADA,
 ]
+
+
+class QualityGateFailed(RuntimeError):
+    """Falha CRITICA de qualidade com o gate ativado.
+
+    A exceção é sinal de saída, não rollback: a escrita nas camadas já aconteceu
+    e o dado ruim continua lá, com a evidência registrada na tabela de qualidade.
+    O que ela garante é que a execução não termine com código zero fingindo
+    sucesso — o que importa quando o comando roda dentro de um encadeamento.
+    """
 
 
 def run_quality_checks(frames: Mapping[str, pd.DataFrame], *, writer=write_results) -> list[QualityResult]:
@@ -152,13 +170,24 @@ def _log_fim_execucao(all_results: list[QualityResult]) -> None:
     )
 
 
-def run_all_quality_checks(frames: Mapping[str, pd.DataFrame] | None = None, *, writer=write_results) -> list[QualityResult]:
+def run_all_quality_checks(
+    frames: Mapping[str, pd.DataFrame] | None = None,
+    *,
+    writer=write_results,
+    fail_on_critical: bool = False,
+) -> list[QualityResult]:
     """Entry point (`make quality`). Com `frames` injetados, valida direto
-    (testes); sem argumento, lê o estado atual da Silver para as 6 entidades
+    (testes); sem argumento, lê o estado atual da Silver para cada entidade
     com isolamento de falha — uma entidade ilegível não impede as demais.
 
-    Sem `frames`, também roda freshness (6 entidades), reconciliação Bronze→Silver (só as 3
-    entidades regulares) e integridade referencial fato×dimensão na Gold (6 pares).
+    Sem `frames`, também roda freshness, reconciliação Bronze→Silver (só as 3
+    entidades regulares) e integridade referencial fato×dimensão na Gold.
+
+    `fail_on_critical` levanta `QualityGateFailed` no fim se houver falha CRITICA,
+    depois de rodar todos os checks e persistir a evidência — nunca antes, para que
+    o relatório saia completo em vez de parar no primeiro problema. Default `False`
+    porque o comportamento historicamente esperado é registrar e seguir; quem quer
+    o gate bloqueante pede explicitamente.
     """
     if frames is not None:
         return run_quality_checks(frames, writer=writer)
@@ -196,4 +225,14 @@ def run_all_quality_checks(frames: Mapping[str, pd.DataFrame] | None = None, *, 
 
     all_results.extend(extra_results)
     _log_fim_execucao(all_results)
+
+    if fail_on_critical:
+        criticas = [r for r in all_results if not r.passou and r.severidade == "CRITICA"]
+        if criticas:
+            entidades = ", ".join(sorted({r.entidade for r in criticas}))
+            raise QualityGateFailed(
+                f"{len(criticas)} falha(s) CRITICA de qualidade em {entidades} "
+                "— ver data_quality_log."
+            )
+
     return all_results
