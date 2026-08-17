@@ -11,13 +11,7 @@ from google.cloud import pubsub_v1
 from bronze import writer as bronze_writer
 from common.retry import with_retry
 from config import get_settings
-from contracts.models import (
-    DadosAlunosRecord,
-    MetaAlfabetizacaoMunicipioRecord,
-    MetaAlfabetizacaoUFRecord,
-    MunicipioRecord,
-    UFRecord,
-)
+from contracts.registry import is_registered, model_for
 from contracts.schema_mapper import to_pyarrow_schema
 from contracts.serialization import to_pyarrow_table
 from observability.logging import log_execution, setup_logger
@@ -25,15 +19,6 @@ from observability.monitoring import get_consumer_lag
 
 TIMEOUT_SECONDS = 10
 LAG_WARNING_THRESHOLD = 100
-
-# Mapa entidade -> modelo Pydantic, para decodificar sem inspecionar o payload
-ENTITY_MODEL_MAP = {
-    "alunos": DadosAlunosRecord,
-    "meta_alfabetizacao_uf": MetaAlfabetizacaoUFRecord,
-    "meta_alfabetizacao_municipio": MetaAlfabetizacaoMunicipioRecord,
-    "uf": UFRecord,
-    "municipio": MunicipioRecord,
-}
 
 
 @with_retry()
@@ -84,13 +69,17 @@ def consume_batch(max_messages: int = 10) -> None:
         for msg in messages:
             rows_read += 1
             entidade = msg.message.attributes.get("entidade")
-            modelo = ENTITY_MODEL_MAP.get(entidade)
-            if modelo is None:
+            if not is_registered(entidade):
+                # Semântica de ack inalterada nesta passagem: a mensagem não é
+                # ackada e o Pub/Sub reentrega. É um modo de falha conhecido
+                # (mensagens irrecuperáveis podem ocupar o lote inteiro) cujo
+                # tratamento é decisão própria, ainda pendente.
                 logger.error(
                     f"Entidade desconhecida em mensagem recebida: {entidade}",
                     extra={"message_id": msg.message.message_id},
                 )
                 continue
+            modelo = model_for(entidade)
 
             try:
                 payload = json.loads(msg.message.data.decode("utf-8"))

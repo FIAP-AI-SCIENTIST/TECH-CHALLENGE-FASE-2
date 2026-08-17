@@ -6,7 +6,7 @@ import pytest
 from pydantic import BaseModel
 
 from streaming.producer import (
-    EVENT_TYPE_MODELS,
+    EVENT_TYPE_ENTITIES,
     _do_publish,
     cloud_function_entrypoint,
     gerar_evento_sintetico,
@@ -52,7 +52,7 @@ class TestGerarEventoSintetico:
             gerar_evento_sintetico("desconhecido")
 
     def test_all_declared_types_are_generatable(self):
-        for tipo_evento in EVENT_TYPE_MODELS:
+        for tipo_evento in EVENT_TYPE_ENTITIES:
             instancia, entidade = gerar_evento_sintetico(tipo_evento)
             assert instancia is not None
             assert entidade
@@ -148,7 +148,7 @@ class TestCloudFunctionEntrypoint:
 
         mock_produce.assert_called_once()
         args, kwargs = mock_produce.call_args
-        assert args[0] in EVENT_TYPE_MODELS
+        assert args[0] in EVENT_TYPE_ENTITIES
         assert kwargs["n"] == 1
         assert status == 200
 

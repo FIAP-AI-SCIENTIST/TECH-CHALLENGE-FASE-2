@@ -15,18 +15,21 @@ from contracts.models import (
     MunicipioRecord,
     UFRecord,
 )
+from contracts.registry import model_for
 from observability.logging import log_execution
 
 TIMEOUT_SECONDS = 10
 
-# Mapa tipo_evento -> modelo(s) candidatos (contratos ja existentes, sem contrato novo)
-EVENT_TYPE_MODELS = {
-    "medicao": [(DadosAlunosRecord, "alunos")],
-    "meta": [
-        (MetaAlfabetizacaoUFRecord, "meta_alfabetizacao_uf"),
-        (MetaAlfabetizacaoMunicipioRecord, "meta_alfabetizacao_municipio"),
-    ],
-    "indicador": [(UFRecord, "uf"), (MunicipioRecord, "municipio")],
+# tipo_evento -> entidades candidatas. O contrato de cada entidade vem do
+# registro (`contracts.registry`), que é a fonte única; este mapa carrega só a
+# composição da demo sintética, que é conhecimento do producer.
+#
+# Renomeado de EVENT_TYPE_MODELS: o mapa nunca mais guarda modelo, e um nome que
+# diz "MODELS" mandaria o próximo leitor procurar contrato no lugar errado.
+EVENT_TYPE_ENTITIES: dict[str, list[str]] = {
+    "medicao": ["alunos"],
+    "meta": ["meta_alfabetizacao_uf", "meta_alfabetizacao_municipio"],
+    "indicador": ["uf", "municipio"],
 }
 
 _UFS = ["SP", "RJ", "MG", "BA", "CE", "PR", "PE", "RS"]
@@ -42,11 +45,12 @@ def gerar_evento_sintetico(tipo_evento: str):
 
     Retorna (instancia, entidade).
     """
-    candidatos = EVENT_TYPE_MODELS.get(tipo_evento)
+    candidatos = EVENT_TYPE_ENTITIES.get(tipo_evento)
     if not candidatos:
         raise ValueError(f"tipo_evento desconhecido: {tipo_evento}")
 
-    modelo, entidade = random.choice(candidatos)
+    entidade = random.choice(candidatos)
+    modelo = model_for(entidade)
     ano = random.randint(2024, 2026)
 
     if modelo is DadosAlunosRecord:
@@ -174,7 +178,7 @@ def cloud_function_entrypoint(request):
     args = request.args or {}
     body = request.get_json(silent=True) or {}
 
-    tipo_evento = args.get("tipo_evento") or body.get("tipo_evento") or random.choice(list(EVENT_TYPE_MODELS))
+    tipo_evento = args.get("tipo_evento") or body.get("tipo_evento") or random.choice(list(EVENT_TYPE_ENTITIES))
     n = int(args.get("n") or body.get("n") or 1)
 
     try:
