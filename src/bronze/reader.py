@@ -10,8 +10,8 @@ from google.cloud import storage
 from google.api_core.exceptions import NotFound
 
 from common.retry import with_retry
+from config import get_settings
 
-BUCKET_NAME = "useful-space-277919-datalake"
 TIMEOUT_SECONDS = 10
 
 
@@ -40,7 +40,8 @@ def list_bronze_years(entidade: str) -> set[int]:
     years: set[int] = set()
     try:
         client = storage.Client()
-        blobs = _list_blobs_for_entity(client, BUCKET_NAME, entidade)
+        settings = get_settings()
+        blobs = _list_blobs_for_entity(client, settings.bucket_name, entidade)
         for blob in blobs:
             _, chave = parse_partition_path(blob.name)
             match = re.fullmatch(r"ano=(\d+)", chave)
@@ -66,13 +67,14 @@ def read_partition(entidade: str, chave: str | None = None) -> pa.Table:
     partição. Senão, lê e concatena todas as partições da entidade.
     """
     client = storage.Client()
+    settings = get_settings()
 
     if chave is not None:
         prefix = f"bronze/{entidade}/{chave}/"
     else:
         prefix = f"bronze/{entidade}/"
 
-    blobs = _list_blobs_for_entity(client, BUCKET_NAME, entidade)
+    blobs = _list_blobs_for_entity(client, settings.bucket_name, entidade)
     if chave is not None:
         blobs = [b for b in blobs if b.name.startswith(prefix)]
 
@@ -98,7 +100,8 @@ def count_partition_rows(entidade: str) -> int:
     blobs (com retry) de `read_partition`.
     """
     client = storage.Client()
-    blobs = _list_blobs_for_entity(client, BUCKET_NAME, entidade)
+    settings = get_settings()
+    blobs = _list_blobs_for_entity(client, settings.bucket_name, entidade)
     total = 0
     for blob in blobs:
         if not blob.name.endswith(".parquet"):

@@ -15,7 +15,7 @@ from google.api_core.exceptions import NotFound
 from google.cloud import storage
 
 from bronze.reader import _download_blob
-from bronze.writer import BUCKET_NAME
+from config import get_settings
 from silver.writer import SILVER_PREFIX, scd2_path
 
 
@@ -28,7 +28,7 @@ def read_scd2_table(entidade: str, schema: pa.Schema) -> pa.Table:
     "entidade sem versões".
     """
     client = storage.Client()
-    bucket = client.bucket(BUCKET_NAME)
+    bucket = client.bucket(get_settings().bucket_name)
     blob = bucket.blob(scd2_path(entidade))
 
     try:
@@ -47,7 +47,7 @@ def read_entity(entidade: str) -> pa.Table:
     Retorna uma tabela sem colunas se a entidade ainda não foi processada.
     """
     client = storage.Client()
-    bucket = client.bucket(BUCKET_NAME)
+    bucket = client.bucket(get_settings().bucket_name)
     prefix = f"{SILVER_PREFIX}/{entidade}/"
 
     try:
@@ -74,7 +74,7 @@ def read_scd2_table_raw(entidade: str) -> pa.Table | None:
     processada pela Silver (nenhuma versão gravada ainda).
     """
     client = storage.Client()
-    bucket = client.bucket(BUCKET_NAME)
+    bucket = client.bucket(get_settings().bucket_name)
     blob = bucket.blob(scd2_path(entidade))
 
     try:

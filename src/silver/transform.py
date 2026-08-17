@@ -51,7 +51,7 @@ _ALUNOS_BOOL_COLUMNS = ("alfabetizado", "presenca", "preenchimento_caderno")
 
 
 def normalize_key(raw_id_municipio: str | None) -> str | None:
-    """Normaliza `id_municipio` para 7 dígitos IBGE (RF04).
+    """Normaliza `id_municipio` para 7 dígitos IBGE.
 
     Retorna `None` se a entrada for vazia ou se, após o padding, não resultar
     em exatamente 7 dígitos numéricos — quem chama decide como tratar a

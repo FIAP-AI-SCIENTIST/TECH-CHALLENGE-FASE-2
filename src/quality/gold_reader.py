@@ -1,17 +1,17 @@
 """Leitura de colunas de fato/dimensão da Gold para o check de integridade referencial.
 
-Fronteira de dependência: importa só `google.cloud.bigquery` e `common.retry` — nunca `gold/`.
-A verificação de FK roda de fora da Gold (mesma regra já declarada em
-`U7-Gold/functional-design/business-rules.md`, "a Gold não valida a si mesma").
+Fronteira de dependência: importa só `google.cloud.bigquery`, `common.retry` e `config` — nunca `gold/`.
+A verificação de FK roda de fora da Gold, respeitando a regra de que a Gold não
+valida a si mesma: quem audita a camada analítica é a camada de qualidade, que a
+lê de fora.
 """
 import time  # pyright: ignore[reportUnusedImport] - necessario para with_retry (common.retry) interceptar time.sleep neste modulo
 
 from google.cloud import bigquery
 
 from common.retry import with_retry
+from config import get_settings
 
-PROJECT_ID = "useful-space-277919"
-DATASET_ID = "alfabetizacao_analytics"
 TIMEOUT_SECONDS = 30
 # Mesmo racional/valor de extraction.py e silver/reference.py: folga generosa sobre o volume
 # real (a maior tabela lida aqui é fact_alunos, ~3,9M linhas de uma única coluna), aborta só
@@ -36,7 +36,8 @@ def read_column(tabela: str, coluna: str) -> tuple[list, int]:
     (fração de linhas cuja FK resolve, não fração de valores distintos). Retorna
     ``(valores, bytes_processados)``.
     """
-    client = bigquery.Client(project=PROJECT_ID)
-    sql = f"SELECT {coluna} FROM `{PROJECT_ID}.{DATASET_ID}.{tabela}`"
+    settings = get_settings()
+    client = bigquery.Client(project=settings.project_id)
+    sql = f"SELECT {coluna} FROM `{settings.project_id}.{settings.dataset_id}.{tabela}`"
     rows, bytes_processed = _do_query(client, sql)
     return [row[coluna] for row in rows], bytes_processed

@@ -5,6 +5,7 @@ description = "Tech Challenge Fase 2 - Pipeline Hibrido"
 requires-python = ">=3.11,<3.14"
 dependencies = [
     "pydantic>=2.0",
+    "pydantic-settings>=2.0",
     "pyarrow",
     "google-cloud-bigquery",
     "google-cloud-storage",

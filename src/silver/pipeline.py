@@ -5,8 +5,8 @@ granularidade de auditoria já usada pelas units anteriores.
 import pyarrow as pa
 
 from bronze import reader as bronze_reader
-from bronze import writer as bronze_writer
 from common.lock import gcs_lock
+from config import get_settings
 from observability.logging import log_execution, setup_logger
 from silver import reference
 from silver import writer as silver_writer
@@ -71,8 +71,8 @@ def run_silver(entidade: str) -> None:
     """
     logger = setup_logger()
 
-    with gcs_lock(bronze_writer.BUCKET_NAME, f"silver/.locks/{entidade}.lock"):
-        with log_execution(unit="Silver", layer="Silver") as run:
+    with gcs_lock(get_settings().bucket_name, f"silver/.locks/{entidade}.lock"):
+        with log_execution(step="Silver", layer="Silver") as run:
             bruta = bronze_reader.read_partition(entidade)
             rows_read = bruta.num_rows
 

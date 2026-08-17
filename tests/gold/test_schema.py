@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
+from config import get_settings
 from gold import schema as gold_schema
 from gold.schema import TABLE_DDL, ensure_table, run_ddl
 
@@ -23,7 +24,7 @@ class TestTableDdl:
 
     def test_every_fact_has_create_if_not_exists(self):
         for nome, ddl in TABLE_DDL.items():
-            assert ddl.startswith(f"CREATE TABLE IF NOT EXISTS `{gold_schema.PROJECT_ID}.{gold_schema.DATASET_ID}.{nome}`")
+            assert ddl.startswith(f"CREATE TABLE IF NOT EXISTS `{get_settings().project_id}.{get_settings().dataset_id}.{nome}`")
 
     def test_every_fact_has_integer_range_partition_on_ano(self):
         for nome, ddl in TABLE_DDL.items():

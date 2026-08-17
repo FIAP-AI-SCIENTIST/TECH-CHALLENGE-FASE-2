@@ -10,11 +10,12 @@ from datetime import datetime, timezone
 from typing import Iterable
 
 from common.retry import with_retry
+from config import get_settings
 
 from .translate import QualityResult
 
 TIMEOUT_SECONDS = 10
-DEFAULT_TABLE = "alfabetizacao_analytics.data_quality_log"
+TABLE_ID = "data_quality_log"
 
 
 def rows_for_bigquery(results: Iterable[QualityResult]) -> list[dict]:
@@ -41,4 +42,5 @@ def write_results(results: Iterable[QualityResult], client=None, table: str | No
     if client is None:
         from google.cloud import bigquery
         client = bigquery.Client()
-    return _do_insert(client, table or DEFAULT_TABLE, rows)
+    settings = get_settings()
+    return _do_insert(client, table or f"{settings.dataset_id}.{TABLE_ID}", rows)

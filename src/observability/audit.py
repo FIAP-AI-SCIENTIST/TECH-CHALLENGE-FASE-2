@@ -4,10 +4,9 @@ import time  # pyright: ignore[reportUnusedImport] - necessario para with_retry 
 from google.cloud import bigquery
 
 from common.retry import with_retry
+from config import get_settings
 from observability.logging import RunContext, setup_logger
 
-PROJECT_ID = "useful-space-277919"
-DATASET_ID = "alfabetizacao_analytics"
 TABLE_ID = "pipeline_audit_log"
 MAX_ATTEMPTS = 3
 TIMEOUT_SECONDS = 10
@@ -20,7 +19,7 @@ def _build_payload(run: RunContext) -> dict:
     """
     return {
         "run_id": run.run_id,
-        "unit": run.unit,
+        "step": run.step,
         "layer": run.layer,
         "rows_read": run.rows_read,
         "rows_written": run.rows_written,
@@ -62,12 +61,13 @@ def write_audit_row(run: RunContext) -> None:
     """
     logger = setup_logger()
     try:
+        settings = get_settings()
         client = bigquery.Client()
-        table_id = f"{PROJECT_ID}.{DATASET_ID}.{TABLE_ID}"
+        table_id = f"{settings.project_id}.{settings.dataset_id}.{TABLE_ID}"
         payload = _build_payload(run)
         _insert_audit_row(client, table_id, payload)
     except Exception as exc:
         logger.error(
             f"Erro ao escrever auditoria: {type(exc).__name__}: {exc}",
-            extra={"run_id": run.run_id, "unit": run.unit, "layer": run.layer},
+            extra={"run_id": run.run_id, "step": run.step, "layer": run.layer},
         )

@@ -11,7 +11,7 @@ LOCATION=$2
 
 if [ -z "$PROJECT_ID" ] || [ -z "$LOCATION" ]; then
     echo "Uso: ./bootstrap.sh <GCP_PROJECT_ID> <LOCATION>"
-    echo "Exemplo: ./bootstrap.sh useful-space-277919 us-central1"
+    echo "Exemplo: ./bootstrap.sh seu-projeto-gcp us-central1"
     exit 1
 fi
 

@@ -37,7 +37,7 @@ COLUMN_PATTERNS = {
     "uf": {"sigla_uf": r"^[A-Z]{2}$"}, "meta_alfabetizacao_uf": {"sigla_uf": r"^[A-Z]{2}$"},
 }
 SEVERIDADE = {"duplicidade": "CRITICA", "chave_relacionamento": "CRITICA", "schema": "CRITICA", "formato_coluna": "CRITICA"}
-# Pares fato x coluna x dimensao x coluna_dim verificados por check_referential_integrity (U10).
+# Pares fato x coluna x dimensao x coluna_dim verificados por check_referential_integrity.
 # So sigla_uf->dim_uf e id_municipio->dim_municipio: rede/serie sao tautologicas (dim_rede/dim_serie
 # sao a uniao dos proprios codigos dos fatos, gold.transform._build_dim_codigo) e nao entram aqui.
 FK_PAIRS: list[tuple[str, str, str, str]] = [

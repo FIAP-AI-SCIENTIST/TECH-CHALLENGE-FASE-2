@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pyarrow as pa
 
+from config import get_settings
 from gold.writer import write_table
 
 
@@ -19,7 +20,8 @@ class TestWriteTable:
         assert rows == 2
         mock_load.assert_called_once()
         args = mock_load.call_args.args
-        assert args[2] == "useful-space-277919.alfabetizacao_analytics.dim_uf"
+        settings = get_settings()
+        assert args[2] == f"{settings.project_id}.{settings.dataset_id}.dim_uf"
 
     def test_load_uses_write_truncate(self):
         table = pa.table({"sigla_uf": ["SP"]})

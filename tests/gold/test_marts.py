@@ -8,6 +8,7 @@ import duckdb
 import pyarrow as pa
 import pytest
 
+from config import get_settings
 from gold import marts
 from gold.marts import MART_QUERIES, create_view, render_view_ddl
 
@@ -141,11 +142,17 @@ class TestMartRankingIndicadorMunicipio:
 class TestRenderECreateView:
     def test_render_qualifica_com_backticks(self):
         """project_id tem hífens — referência sem backtick seria erro de sintaxe no BigQuery."""
+        settings = get_settings()
         ddl = render_view_ddl("mart_evolucao_indicador_uf")
         assert ddl.startswith(
-            "CREATE OR REPLACE VIEW `useful-space-277919.alfabetizacao_analytics.mart_evolucao_indicador_uf` AS"
+            f"CREATE OR REPLACE VIEW `{settings.project_id}.{settings.dataset_id}.mart_evolucao_indicador_uf` AS"
         )
-        assert "`useful-space-277919.alfabetizacao_analytics`.fact_indicador_uf" in ddl
+        assert f"`{settings.project_id}.{settings.dataset_id}`.fact_indicador_uf" in ddl
+
+    def test_render_aceita_projeto_e_dataset_explicitos(self):
+        ddl = render_view_ddl("mart_evolucao_indicador_uf", project_id="p", dataset_id="d")
+        assert ddl.startswith("CREATE OR REPLACE VIEW `p.d.mart_evolucao_indicador_uf` AS")
+        assert "`p.d`.fact_indicador_uf" in ddl
 
     def test_create_view_chama_run_ddl_com_o_ddl_renderizado(self):
         with patch("gold.marts.bigquery.Client"), \

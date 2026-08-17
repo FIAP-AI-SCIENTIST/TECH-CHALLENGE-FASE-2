@@ -7,8 +7,9 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from config import get_settings
+
 from bronze.reader import (
-    BUCKET_NAME,
     count_partition_rows,
     list_bronze_years,
     parse_partition_path,
