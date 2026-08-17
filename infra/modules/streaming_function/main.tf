@@ -31,6 +31,11 @@ resource "google_cloudfunctions2_function" "producer" {
     timeout_seconds       = 60
     max_instance_count    = 1
     service_account_email = var.service_account_email
+    # A função não tem .env — o identificador do projeto precisa vir do ambiente,
+    # senão a leitura de configuração falha na primeira chamada (fail-closed).
+    environment_variables = {
+      GCP_PROJECT_ID = var.project_id
+    }
   }
 }
 
