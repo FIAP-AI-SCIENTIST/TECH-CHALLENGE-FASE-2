@@ -6,11 +6,15 @@ from gold.transform import (
     build_dim_municipio,
     build_dim_rede,
     build_dim_serie,
+    build_dim_tempo,
     build_dim_uf,
+    build_fact_alfabetizacao_municipio,
     build_fact_alunos,
     build_fact_indicador_municipio,
     build_fact_indicador_uf,
     build_fact_meta_resultado,
+    surrogate_key,
+    with_surrogate_keys,
 )
 
 
@@ -28,7 +32,7 @@ class TestBuildDimUf:
         diretorio = pa.table({"ano": [2023]})
         dim = build_dim_uf(diretorio)
         assert dim.num_rows == 0
-        assert set(dim.column_names) == {"sigla_uf", "nome"}
+        assert set(dim.column_names) == {"sk_uf", "sigla_uf", "nome"}
 
 
 class TestBuildDimMunicipio:
@@ -62,7 +66,7 @@ class TestBuildDimCodigo:
         uf = pa.table({"ano": [2023]})
         dim = build_dim_serie(uf)
         assert dim.num_rows == 0
-        assert set(dim.column_names) == {"serie", "serie_desc"}
+        assert set(dim.column_names) == {"sk_serie", "serie", "serie_desc"}
 
 
 class TestBuildFactIndicador:
@@ -167,3 +171,150 @@ class TestBuildFactMetaResultado:
         scd2 = pa.Table.from_pylist([], schema=self._SCHEMA)
         fato = build_fact_meta_resultado(scd2, ["sigla_uf", "rede"])
         assert fato.num_rows == 0
+
+    def test_adds_surrogate_keys_for_natural_keys_and_tempo(self):
+        scd2 = pa.Table.from_pylist([{
+            "sigla_uf": "SP", "rede": "0", "ano": 2024, "taxa_alfabetizacao": 60.0,
+            "meta_alfabetizacao_2024": 70.0, "meta_alfabetizacao_2025": 75.0,
+            "meta_alfabetizacao_2026": 80.0, "meta_alfabetizacao_2027": 85.0,
+            "meta_alfabetizacao_2028": 90.0, "meta_alfabetizacao_2029": 95.0,
+            "meta_alfabetizacao_2030": 100.0, "percentual_participacao": 90.0,
+            "valid_from": 2024, "valid_to": None, "is_current": True,
+        }], schema=self._SCHEMA)
+
+        fato = build_fact_meta_resultado(scd2, ["sigla_uf", "rede"])
+
+        row = fato.to_pylist()[0]
+        assert row["sk_uf"] == surrogate_key("uf", "SP")
+        assert row["sk_rede"] == surrogate_key("rede", "0")
+        assert row["sk_tempo"] == surrogate_key("tempo", 2024)
+
+
+class TestSurrogateKey:
+    def test_is_deterministic(self):
+        assert surrogate_key("municipio", "3550308") == surrogate_key("municipio", "3550308")
+
+    def test_none_returns_none(self):
+        assert surrogate_key("municipio", None) is None
+
+    def test_fits_int64_signed(self):
+        for chave in ("3550308", "SP", "0", "2", 2024):
+            sk = surrogate_key("municipio", chave)
+            assert -(2**63) <= sk < 2**63
+
+    def test_namespace_prevents_cross_dimension_collision(self):
+        """O código "2" existe como rede e como série — sem namespace, as duas
+        dimensões gerariam a mesma SK e um join errado passaria despercebido."""
+        assert surrogate_key("rede", "2") != surrogate_key("serie", "2")
+
+    def test_distinct_keys_give_distinct_sks(self):
+        sks = {surrogate_key("municipio", f"{i:07d}") for i in range(1000)}
+        assert len(sks) == 1000
+
+
+class TestWithSurrogateKeys:
+    def test_adds_sk_without_touching_existing_columns(self):
+        tabela = pa.table({"sigla_uf": ["SP", "RJ"], "nome": ["São Paulo", "Rio de Janeiro"]})
+        resultado = with_surrogate_keys(tabela, {"sk_uf": ("uf", "sigla_uf")})
+        assert resultado.column("sigla_uf").to_pylist() == ["SP", "RJ"]
+        assert resultado.column("sk_uf").to_pylist() == [surrogate_key("uf", "SP"), surrogate_key("uf", "RJ")]
+        assert resultado.schema.field("sk_uf").type == pa.int64()
+
+    def test_null_natural_key_gives_null_sk(self):
+        tabela = pa.table({"sigla_uf": pa.array(["SP", None], type=pa.string())})
+        resultado = with_surrogate_keys(tabela, {"sk_uf": ("uf", "sigla_uf")})
+        assert resultado.column("sk_uf").to_pylist()[1] is None
+
+    def test_missing_natural_key_column_is_skipped(self):
+        tabela = pa.table({"ano": [2023]})
+        resultado = with_surrogate_keys(tabela, {"sk_uf": ("uf", "sigla_uf")})
+        assert "sk_uf" not in resultado.column_names
+
+    def test_table_without_columns_passes_through(self):
+        tabela = pa.Table.from_pydict({})
+        assert with_surrogate_keys(tabela, {"sk_uf": ("uf", "sigla_uf")}).column_names == []
+
+
+class TestBuildDimTempo:
+    def test_covers_observed_years_and_goal_horizon(self):
+        dim = build_dim_tempo([2022, 2023])
+        anos = dim.column("ano").to_pylist()
+        assert {2022, 2023} <= set(anos)
+        assert set(range(2024, 2031)) <= set(anos)
+
+    def test_empty_input_still_covers_goal_horizon(self):
+        """Mesmo sem nenhum ano observado, o horizonte da meta nacional existe."""
+        dim = build_dim_tempo([])
+        assert set(dim.column("ano").to_pylist()) == set(range(2024, 2031))
+
+    def test_grain_is_unique_and_sorted(self):
+        dim = build_dim_tempo([2023, 2022, 2023, 2025])
+        anos = dim.column("ano").to_pylist()
+        assert anos == sorted(set(anos))
+
+    def test_derived_attributes(self):
+        dim = build_dim_tempo([2023, 2025])
+        por_ano = {r["ano"]: r for r in dim.to_pylist()}
+        assert por_ano[2023]["ano_tem_meta"] is False
+        assert por_ano[2025]["ano_tem_meta"] is True
+        assert por_ano[2025]["anos_para_meta_final"] == 5
+        assert por_ano[2023]["decada"] == 2020
+
+    def test_sk_matches_tempo_namespace(self):
+        dim = build_dim_tempo([2023])
+        por_ano = {r["ano"]: r["sk_tempo"] for r in dim.to_pylist()}
+        assert por_ano[2023] == surrogate_key("tempo", 2023)
+
+    def test_ignores_null_years(self):
+        dim = build_dim_tempo([2023, None])
+        assert None not in dim.column("ano").to_pylist()
+
+
+class TestBuildFactAlfabetizacaoMunicipio:
+    def _integrada(self) -> pa.Table:
+        return pa.table({
+            "ano": [2024, 2024, 2023],
+            "id_municipio": ["3550308", "3304557", "3550308"],
+            "rede": ["1", "1", "1"],
+            "serie": ["2", "2", "2"],
+            "taxa_alfabetizacao": [80.0, 60.0, 75.0],
+            "media_portugues": [700.0, 650.0, 690.0],
+            "meta_indicador": [75.0, 70.0, None],
+            "percentual_participacao": [95.0, 90.0, None],
+            "nivel_alfabetizacao": pa.array([2, 1, None], type=pa.int64()),
+        })
+
+    def test_meta_e_resultado_na_mesma_linha(self):
+        fato = build_fact_alfabetizacao_municipio(self._integrada())
+        por_chave = {(r["ano"], r["id_municipio"]): r for r in fato.to_pylist()}
+        sp2024 = por_chave[(2024, "3550308")]
+        assert sp2024["taxa_alfabetizacao"] == 80.0
+        assert sp2024["meta_indicador"] == 75.0
+        assert sp2024["gap_pontos"] == 5.0
+        assert sp2024["atingiu_meta"] is True
+
+    def test_gap_e_atingiu_meta_null_sem_meta(self):
+        """Ano fora do horizonte da meta (ou município sem meta): ausência é
+        NULL, nunca zero — zero fingiria meta inexistente cumprida/não cumprida."""
+        fato = build_fact_alfabetizacao_municipio(self._integrada())
+        sp2023 = next(r for r in fato.to_pylist() if r["ano"] == 2023)
+        assert sp2023["meta_indicador"] is None
+        assert sp2023["gap_pontos"] is None
+        assert sp2023["atingiu_meta"] is None
+
+    def test_preserva_chaves_naturais_e_adiciona_sks(self):
+        fato = build_fact_alfabetizacao_municipio(self._integrada())
+        row = fato.to_pylist()[0]
+        assert row["id_municipio"] == "3550308"
+        assert row["sk_municipio"] == surrogate_key("municipio", "3550308")
+        assert row["sk_tempo"] == surrogate_key("tempo", row["ano"])
+        assert row["sk_rede"] == surrogate_key("rede", "1")
+        assert row["sk_serie"] == surrogate_key("serie", "2")
+
+    def test_preserves_row_count(self):
+        fato = build_fact_alfabetizacao_municipio(self._integrada())
+        assert fato.num_rows == 3
+
+    def test_empty_integrada_passes_through(self):
+        vazia = pa.Table.from_pydict({})
+        assert build_fact_alfabetizacao_municipio(vazia).column_names == []
