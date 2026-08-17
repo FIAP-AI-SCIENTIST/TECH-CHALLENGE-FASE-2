@@ -2,6 +2,20 @@
 
 Preços vigentes em 2026-08, verificados na tabela de preços oficial do Google Cloud (região US) em 2026-08-17, sobre o volume que o pipeline efetivamente produz — não sobre projeções.
 
+## Resumo executivo
+
+| Métrica | Valor |
+|---|---|
+| Custo mensal esperado | **R$ 0** (100% dentro dos free tiers) |
+| Custo medido por rodada completa (cache quente, dado real) | **US$ 0,0008** (94 query jobs, 37 servidos de cache, 125,8 MB cobrados) |
+| Custo por rodada fria (sem cache, pior caso de scan) | **US$ 0,0016** (≈ 259 MiB escaneados) |
+| Salvaguarda orçamentária | Orçamento de **R$ 1,00** com alertas em 50/90/100% — desvio aparece em dias, não em meses |
+| Margem até o teto do free tier de BigQuery (1 TiB/mês) | **~4.000 rodadas frias/mês** (o pipeline roda algumas vezes/semana) |
+| Resiliência a crescimento de volume | Mesmo a **100x** o volume atual (~390M linhas, escala censo nacional) o consumo de query cabe dentro do free tier mensal — ver [Cenário de crescimento](#cenário-de-crescimento-10x--100x) |
+| Maior custo unitário do pipeline | Entidade `alunos`: **98,9% dos bytes escaneados** (256,1 MiB de ≈259 MiB) — é o único ponto que merece atenção se o volume crescer |
+
+Em uma frase: o pipeline foi desenhado para não gerar fatura em condições normais de uso, e os números medidos em produção confirmam a premissa — a rodada mais cara registrada até agora custou menos de um décimo de centavo de dólar.
+
 ## Objetivo
 
 O projeto é dimensionado para rodar dentro dos **free tiers** do GCP. Como salvaguarda contra qualquer desvio dessa premissa, a infraestrutura provisiona um **orçamento de R$ 1,00** com alertas em 50%, 90% e 100% — o primeiro custo técnico, se existir, aparece em dias, não em meses.
@@ -19,19 +33,25 @@ O projeto é dimensionado para rodar dentro dos **free tiers** do GCP. Como salv
 
 Todos os recursos cobráveis levam cost labels (`pipeline`, `componente`), permitindo atribuir o custo por camada no relatório de faturamento.
 
-## Volumes esperados
+## Volumes: piso mínimo (quality gate) vs. volume real observado
 
-Volumes com piso garantido pelo gate de qualidade (`src/quality/rules.py`):
+Dois números diferentes aparecem neste documento e não devem ser confundidos:
 
-| Entidade | Linhas/ano (mínimo) |
-|---|---|
-| `alunos` | 100.000 |
-| `municipio` | 1.000 |
-| `meta_alfabetizacao_municipio` | 1.000 |
-| `uf`, `meta_alfabetizacao_uf` | 27 |
-| `meta_alfabetizacao_brasil` | 1 |
+- **Piso mínimo** (tabela abaixo): o menor volume aceitável por execução, verificado pelo gate de qualidade (`src/quality/rules.py`). Se uma extração vier abaixo disso, o check `CRITICA` de volume falha e o pipeline para — é uma salvaguarda contra ingestão incompleta, não uma previsão de volume.
+- **Volume real observado**: o que a fonte pública de fato contém, medido na rodada de produção — ver [Medições reais](#medições-reais-rodada-de-2026-08-17) logo abaixo. Para `alunos`, por exemplo, o piso é 100.000 linhas mas o volume real medido foi **3.867.999** (quase 39x o piso) — a folga entre os dois números é intencional, para que o check não dispare em falsos positivos por sazonalidade normal da fonte.
 
-Na ordem de ~10⁶ linhas e algumas centenas de MB em Parquet (Bronze + Silver + Gold) em todos os anos. Por execução full (extração do dataset público + leituras Silver/Gold/qualidade), o volume escaneado fica na ordem de algumas centenas de MB — o valor medido por execução está em `pipeline_audit_log` (`total_bytes_processed` por passo), com a ressalva do cache de resultados explicada na seção de medições abaixo.
+| Entidade | Piso mínimo (gate de qualidade) | Volume real observado (rodada 2026-08-17) |
+|---|---:|---:|
+| `alunos` | 100.000 | 3.867.999 |
+| `municipio` | 1.000 | 23.995 |
+| `meta_alfabetizacao_municipio` | 1.000 | 10.704 |
+| `uf` | 27 | 145 † |
+| `meta_alfabetizacao_uf` | 27 | 81 |
+| `meta_alfabetizacao_brasil` | 1 | 3 |
+
+† `uf` tem 27 unidades federativas, mas 145 linhas porque a entidade é histórica (múltiplos anos por UF), não um snapshot único.
+
+Em todos os anos, o volume fica na ordem de ~10⁶ linhas e algumas centenas de MB em Parquet (Bronze + Silver + Gold). Por execução full (extração do dataset público + leituras Silver/Gold/qualidade), o volume escaneado no BigQuery fica na ordem de algumas centenas de MB — o valor medido por execução está em `pipeline_audit_log` (`total_bytes_processed` por passo), com a ressalva do cache de resultados explicada na seção de medições abaixo.
 
 ## Medições reais (rodada de 2026-08-17)
 
@@ -53,6 +73,16 @@ Rodada completa de `make pipeline-from-scratch` (destroy de 30 recursos → appl
 - **Bytes processados = 0 nas extrações — não é bug, é cache.** As queries contra a fonte pública foram servidas pelo cache de resultados do BigQuery (a fonte é imutável entre rodadas e o cache vale ~24 h, independente do ciclo destroy/apply das tabelas do projeto). Medição agregada da janela via `INFORMATION_SCHEMA.JOBS`: 94 query jobs, 37 servidos de cache, 31,6 MB processados / 125,8 MB cobrados → **~US$ 0,0008** na rodada.
 - **Cenário frio (sem cache)**: o scan completo das 6 tabelas da fonte soma **≈ 259 MiB** (`alunos` 256,1 MiB + `municipio` 1,7 + `meta_alfabetizacao_municipio` 1,1; demais ≈ 0), medido em `__TABLES__` do dataset público. A US$ 6,25/TiB, uma rodada fria custa **~US$ 0,0016**; o free tier de 1 TiB/mês comporta **~4.000 rodadas completas**.
 
+### Onde o custo se concentra
+
+![Bytes escaneados por entidade, escala log, cenário frio](charts/bytes-por-entidade.png)
+
+`alunos` sozinha responde por **98,9%** dos bytes escaneados por rodada — é a única entidade que, numa hipótese de crescimento, moveria o ponteiro de custo (ver [Cenário de crescimento](#cenário-de-crescimento-10x--100x) abaixo). As outras 5 entidades são, na prática, gratuitas mesmo em cenário frio.
+
+![Distribuição dos 94 query jobs entre servidos por cache e cobrados](charts/cache-vs-cobrado.png)
+
+Mais de um terço dos jobs nem chegou a escanear dado — o cache de 24h do BigQuery absorve reexecuções dentro do mesmo dia, o que também protege contra reprocessamento acidental durante debug.
+
 ## Estimativa por serviço
 
 | Serviço | Consumo mensal | Free tier | Custo esperado |
@@ -73,6 +103,49 @@ O Cloud Scheduler cobra por **job agendado** (a definição), não por execuçã
 
 - **Esperado: R$ 0** (tudo dentro dos free tiers, incluindo o Scheduler).
 - **Pior caso: centavos de US$/mês** (storage BigQuery/GCS se os dados persistirem além da demonstração; o alerta de orçamento de R$ 1 é a salvaguarda contra qualquer desvio dessa estimativa).
+
+## Cenário de crescimento (10x / 100x)
+
+O README cita, nos trade-offs, um cenário de crescimento de ordens de grandeza — por exemplo, o Censo Escolar nacional no grão do aluno (centenas de milhões de linhas). Como o custo de query do BigQuery é linear em bytes escaneados, e `alunos` já é 98,9% do scan, a projeção de custo é direta: multiplicar o volume da entidade `alunos` e manter as demais praticamente constantes.
+
+| Cenário | Multiplicador | Linhas `alunos` (aprox.) | Bytes escaneados (frio) | Custo por rodada fria | Rodadas frias que cabem no free tier (1 TiB/mês) |
+|---|---:|---:|---:|---:|---:|
+| **Atual** (medido) | 1x | 3,9M | ≈ 259 MiB | ≈ US$ 0,0016 | ≈ 4.000/mês |
+| **Crescimento moderado** | 10x | ≈ 39M | ≈ 2,6 GiB | ≈ US$ 0,016 | ≈ 400/mês |
+| **Escala censo nacional** | 100x | ≈ 390M | ≈ 26 GiB | ≈ US$ 0,16 | ≈ 40/mês |
+
+![Custo por rodada fria conforme o volume cresce, escala log](charts/cenario-crescimento.png)
+
+**Leitura prática:**
+
+- Mesmo a **100x**, uma rodada fria custa **US$ 0,16** — para o padrão de uso atual (algumas execuções por semana), o consumo mensal de query continua muito abaixo do 1 TiB gratuito, e o orçamento de R$ 1,00 segue como salvaguarda suficiente.
+- O ponto onde o free tier de query deixaria de sobrar é em torno de **~40 rodadas frias/mês a 100x** — ou seja, o pipeline precisaria rodar mais de uma vez por dia *nesse volume* para começar a gerar custo real de query. Hoje ele roda sob demanda / algumas vezes por semana.
+- O que **não** escala linearmente de graça é o *processamento* fora do BigQuery: a Silver (DuckDB embarcado, single-node) e o storage no GCS. A 100x, ~390M linhas de `alunos` já se aproximam do ponto em que o trade-off "Spark fora do desenho" do README deixa de valer — o próprio README já antecipa esse limite e aponta o caminho (Dataproc Serverless ou empurrar a transformação para dentro do BigQuery). Ou seja: **o teto de custo em query não é o gargalo nesse cenário — o teto de memória de um processo single-node é.**
+- Storage no GCS (Bronze + Silver em Parquet) cresce também de forma aproximadamente linear com o volume; a 100x, os dados brutos passariam a se aproximar do teto de 50 GB do free tier de Cloud Storage, o que já justificaria revisar o ciclo de vida do bucket (hoje configurado para dados efêmeros de demo) antes de chegar lá.
+
+## Boas práticas de FinOps aplicadas
+
+Além da estimativa de custo em si, o pipeline aplica três práticas que reduzem custo pela forma como processa dado, não só pelo que fica dentro do free tier:
+
+### Uso eficiente de armazenamento (Parquet + particionamento)
+
+- **Formato**: todas as camadas (Bronze, Silver, Gold intermediária) usam **Parquet colunar** — leitura seletiva de colunas e compressão nativa, contra CSV/JSON que forçariam scan de linha inteira e storage sem compressão.
+- **Particionamento hive-style**: a Bronze grava por `ano=` (entidades regulares) ou `data_ingestao=YYYY-MM-DD` (streaming) — `src/bronze/writer.py::build_partition_path`. Isso permite que a Silver leia (`src/bronze/reader.py::read_partition`) só a partição de interesse em vez do dataset inteiro quando o caller passa uma chave específica.
+- **Ciclo de vida do bucket**: dado bruto com 30+ dias migra para Nearline, 180+ dias para Coldline (Terraform, ver seção FinOps do README) — o histórico completo fica preservado (requisito do enunciado) sem pagar tarifa Standard por dado raramente acessado.
+
+### Otimização de queries
+
+- **Teto de custo por query**: toda extração roda com `maximum_bytes_billed=10 GB` (`src/extraction/extraction.py`, `MAX_BYTES_BILLED = 10 * 2**30`) — um scan acidentalmente caro (ex: bug de filtro) falha a query em vez de gerar fatura. É uma trava técnica, não só uma boa intenção documentada.
+- **Extração incremental evita reler o histórico**: depois da carga full, as execuções seguintes usam `WHERE ano > {max_existing}` (`src/extraction/extraction.py`) — cada execução escaneia só o ano novo, não a tabela inteira de novo.
+- **Cache de resultados do BigQuery**: como a fonte pública não muda entre rodadas, o cache de 24h absorve reexecuções no mesmo dia — na rodada medida, 37 dos 94 query jobs (39%) foram servidos de cache sem custo algum (ver [gráfico acima](#onde-o-custo-se-concentra)).
+- **Leitura seletiva de colunas na Silver**: as transformações em DuckDB (`src/silver/transform.py`) fazem `SELECT` das colunas necessárias, não `SELECT *`, reduzindo I/O de leitura do Parquet.
+
+### Controle de recursos computacionais
+
+- **Cloud Function dimensionada no mínimo viável**: o producer roda com **256 MB** de memória e **1 instância** máxima (`infra/modules/streaming_function/main.tf`) — não é o padrão maior do provedor, é o piso que a carga (gerar e publicar eventos sintéticos) exige.
+- **Sem cluster distribuído**: a Silver processa em **DuckDB embarcado, single-node**, no mesmo processo Python — sem custo de cluster provisionado (Dataproc/Spark) para um volume que uma máquina processa em segundos (a rodada real levou ~278 s para 3,9M linhas na Silver inteira). Justificativa completa no trade-off "Spark fora do desenho" do README.
+- **Um único job de scheduler**: o Cloud Scheduler dispara 1 job a cada 10 min (não N jobs), mantendo o projeto dentro do free tier de 3 jobs/mês por conta de faturamento — ver [seção dedicada](#cloud-scheduler--cobrança-por-job-não-por-execução) abaixo.
+- **`WRITE_TRUNCATE` em vez de infraestrutura de merge incremental**: a Gold é recriada do zero a cada execução porque, no volume atual, isso é mais barato em bytes processados *e* em complexidade operacional do que manter lógica de merge — decisão revisitável se o volume crescer (ver [Cenário de crescimento](#cenário-de-crescimento-10x--100x)).
 
 ## Como verificar no ambiente real
 
