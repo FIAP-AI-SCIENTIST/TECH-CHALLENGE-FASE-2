@@ -2,7 +2,7 @@ import pandas as pd
 import pyarrow as pa
 import pytest
 
-from quality.pipeline import run_all_quality_checks, run_entity_quality_checks, run_quality_checks
+from quality.pipeline import QualityGateFailed, run_all_quality_checks, run_entity_quality_checks, run_quality_checks
 
 
 def test_entities_are_isolated_and_writer_is_best_effort():
@@ -43,6 +43,7 @@ def test_run_all_reads_current_silver_state(monkeypatch):
 
 def test_run_all_isolates_silver_read_failure(monkeypatch):
     from silver import reader as silver_reader
+    from silver.transform import ENTIDADE_INTEGRADA
 
     def explode(entidade):
         raise RuntimeError("gcs offline")
@@ -53,7 +54,7 @@ def test_run_all_isolates_silver_read_failure(monkeypatch):
 
     results = run_all_quality_checks(writer=lambda _: None)
     read_failures = [r for r in results if r.check == "read"]
-    assert {r.entidade for r in read_failures} == {"uf", "municipio", "alunos"}
+    assert {r.entidade for r in read_failures} == {"uf", "municipio", "alunos", ENTIDADE_INTEGRADA}
     assert all(r.severidade == "CRITICA" and not r.passou for r in read_failures)
     # Metas continuaram sendo validadas apesar da falha das regulares.
     assert any(r.entidade == "meta_alfabetizacao_uf" and r.check != "read" for r in results)
@@ -101,8 +102,9 @@ def _patch_gold_and_bronze(monkeypatch, *, bronze_rows=None, gold_columns=None):
     monkeypatch.setattr(quality_pipeline.gold_reader, "read_column", fake_read_column)
 
 
-def test_freshness_runs_for_all_six_entities(monkeypatch):
+def test_freshness_runs_for_all_entities(monkeypatch):
     from silver import reader as silver_reader
+    from silver.transform import ENTIDADE_INTEGRADA
 
     monkeypatch.setattr(silver_reader, "read_entity", lambda entidade: pa.table({"ano": [2024]}))
     monkeypatch.setattr(silver_reader, "read_scd2_table_raw", lambda entidade: pa.table({"ano": [2024]}))
@@ -113,6 +115,7 @@ def test_freshness_runs_for_all_six_entities(monkeypatch):
     assert frescor == {
         "uf", "municipio", "alunos",
         "meta_alfabetizacao_brasil", "meta_alfabetizacao_uf", "meta_alfabetizacao_municipio",
+        ENTIDADE_INTEGRADA,
     }
 
 
@@ -175,3 +178,60 @@ def test_fk_check_runs_for_five_pairs_and_isolates_failure(monkeypatch):
     assert {r.entidade for r in fk_results} == fatos_com_par
     assert fk_failures and fk_failures[0].severidade == "CRITICA" and not fk_failures[0].passou
     assert len(fk_results) + 1 == len(FK_PAIRS)
+
+
+def _patch_silver_valido(monkeypatch):
+    """Estado Silver mínimo e válido: uma linha por entidade, com as colunas
+    obrigatórias presentes e os formatos dentro do padrão. Base para os testes
+    do gate — cada teste quebra (ou não) uma entidade específica."""
+    from silver import reader as silver_reader
+    from silver.transform import ENTIDADE_INTEGRADA
+
+    regulares = {
+        "uf": pa.table({"ano": [2024], "sigla_uf": ["SP"], "serie": ["2"], "rede": ["0"]}),
+        "municipio": pa.table({"ano": [2024], "id_municipio": ["1234567"], "serie": ["2"], "rede": ["0"]}),
+        "alunos": pa.table({"ano": [2024], "id_municipio": ["1234567"], "id_aluno": ["1"]}),
+        ENTIDADE_INTEGRADA: pa.table({"ano": [2024], "id_municipio": ["1234567"], "rede": ["0"], "serie": ["2"]}),
+    }
+    metas = {
+        "meta_alfabetizacao_brasil": pa.table({"ano": [2024], "rede": ["0"]}),
+        "meta_alfabetizacao_uf": pa.table({"ano": [2024], "sigla_uf": ["SP"], "rede": ["0"]}),
+        "meta_alfabetizacao_municipio": pa.table({"ano": [2024], "id_municipio": ["1234567"], "rede": ["0"]}),
+    }
+    monkeypatch.setattr(silver_reader, "read_entity", lambda entidade: regulares[entidade])
+    monkeypatch.setattr(silver_reader, "read_scd2_table_raw", lambda entidade: metas[entidade])
+    return regulares
+
+
+def _patch_gate_sem_criticas(monkeypatch):
+    """Neutraliza as fontes de CRITICA fora das regras GX: o piso real de
+    volumetria exigiria 100k linhas em `alunos` (o gate, não a volumetria, é o
+    alvo destes testes), a reconciliação casa 1x1 e a Gold retorna chave válida."""
+    from quality import pipeline as quality_pipeline
+    from quality import rules as quality_rules
+
+    monkeypatch.setattr(quality_rules, "ROW_COUNT_MIN", {})
+    monkeypatch.setattr(quality_pipeline.bronze_reader, "count_partition_rows", lambda entidade: 1)
+    monkeypatch.setattr(quality_pipeline.gold_reader, "read_column", lambda tabela, coluna: (["SP"], 0))
+
+
+def test_fail_on_critical_passes(monkeypatch):
+    _patch_silver_valido(monkeypatch)
+    _patch_gate_sem_criticas(monkeypatch)
+
+    results = run_all_quality_checks(writer=lambda _: None, fail_on_critical=True)
+    assert results
+    assert not [r for r in results if not r.passou and r.severidade == "CRITICA"]
+
+
+def test_fail_on_critical_raises(monkeypatch):
+    regulares = _patch_silver_valido(monkeypatch)
+    # Grão duplicado na UF — duplicidade é CRITICA e deve derrubar o gate.
+    regulares["uf"] = pa.table({"ano": [2024, 2024], "sigla_uf": ["SP", "SP"], "serie": ["2", "2"], "rede": ["0", "0"]})
+    _patch_gate_sem_criticas(monkeypatch)
+
+    written = []
+    with pytest.raises(QualityGateFailed, match="uf"):
+        run_all_quality_checks(writer=lambda rows: written.extend(rows), fail_on_critical=True)
+    # O raise vem depois da evidência: o relatório é persistido mesmo com o gate bloqueando.
+    assert written
