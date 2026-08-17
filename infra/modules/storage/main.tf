@@ -48,9 +48,12 @@ resource "google_storage_bucket" "datalake" {
 
   # Upload interrompido no meio deixa fragmentos que continuam sendo cobrados
   # como armazenamento e nunca aparecem na listagem de objetos.
+  # A API do GCS só aceita age/matches_prefix/matches_suffix como condição
+  # desta regra — qualquer outra (ex: days_since_noncurrent_time) passa no
+  # validate/plan e só falha no apply, com erro 400.
   lifecycle_rule {
     condition {
-      days_since_noncurrent_time = 1
+      age = 1
     }
     action {
       type = "AbortIncompleteMultipartUpload"
