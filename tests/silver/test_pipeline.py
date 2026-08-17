@@ -205,7 +205,8 @@ class TestRunAllSilver:
             if entidade == "municipio":
                 raise ValueError("falha simulada")
 
-        with patch("silver.pipeline.run_silver", side_effect=fake_run_silver):
+        with patch("silver.pipeline.run_silver", side_effect=fake_run_silver), \
+             patch("silver.pipeline.run_integracao") as mock_integracao:
             with pytest.raises(RuntimeError):
                 run_all_silver()
 
@@ -218,7 +219,125 @@ class TestRunAllSilver:
             "meta_alfabetizacao_municipio",
             "alunos",
         ]
+        # Com entidade falhada, a integrada não é reconstruída — insumo
+        # parcial não gera tabela derivada parcial.
+        mock_integracao.assert_not_called()
 
     def test_all_succeed_does_not_raise(self):
-        with patch("silver.pipeline.run_silver"):
+        with patch("silver.pipeline.run_silver"), \
+             patch("silver.pipeline.run_integracao") as mock_integracao:
             run_all_silver()  # nao levanta
+        mock_integracao.assert_called_once()
+
+    def test_integracao_failing_marks_run_failed(self):
+        with patch("silver.pipeline.run_silver"), \
+             patch("silver.pipeline.run_integracao", side_effect=ValueError("falha simulada")):
+            with pytest.raises(RuntimeError):
+                run_all_silver()
+
+
+class TestRunIntegracao:
+    """Fluxo da tabela integrada: lê o estado Silver das duas entidades de
+    insumo, escreve uma partição por ano e roda o hook de qualidade."""
+
+    def _municipio_silver(self) -> pa.Table:
+        return pa.table({
+            "ano": [2023, 2024],
+            "id_municipio": ["3550308", "3550308"],
+            "rede": ["1", "1"],
+            "serie": ["2", "2"],
+            "rede_desc": ["Pública", "Pública"],
+            "serie_desc": ["2º ano", "2º ano"],
+            "nome": ["São Paulo", "São Paulo"],
+            "sigla_uf": ["SP", "SP"],
+            "nome_regiao": ["Sudeste", "Sudeste"],
+            "capital_uf": [1, 1],
+            "taxa_alfabetizacao": [70.0, 80.0],
+            "media_portugues": [650.0, 700.0],
+        })
+
+    def _meta_scd2(self) -> pa.Table:
+        return pa.table({
+            "ano": [2023],
+            "id_municipio": ["3550308"],
+            "rede": ["1"],
+            "meta_alfabetizacao_2024": [75.0],
+            "percentual_participacao": [95.0],
+            "nivel_alfabetizacao": pa.array([2], type=pa.int64()),
+            "valid_from": pa.array([2023], type=pa.int64()),
+            "valid_to": pa.array([None], type=pa.int64()),
+            "is_current": [True],
+        })
+
+    def _run(self, municipio, meta):
+        from silver.pipeline import run_integracao
+
+        mock_log, mock_run = _mock_log_execution()
+        with patch("silver.pipeline.gcs_lock", new=_mock_lock()), \
+             patch("silver.pipeline.log_execution", mock_log), \
+             patch("silver.pipeline.silver_reader.read_entity", return_value=municipio), \
+             patch("silver.pipeline.silver_reader.read_scd2_table_raw", return_value=meta), \
+             patch("quality.pipeline.run_entity_quality_checks", return_value=[]) as mock_quality, \
+             patch("silver.pipeline.silver_writer.clear_entity") as mock_clear, \
+             patch("silver.pipeline.silver_writer.write_entity", side_effect=lambda *a: 1) as mock_write:
+            run_integracao()
+        return mock_run, mock_quality, mock_clear, mock_write
+
+    def test_writes_one_partition_per_year(self):
+        mock_run, mock_quality, mock_clear, mock_write = self._run(self._municipio_silver(), self._meta_scd2())
+
+        assert {c.args[1] for c in mock_write.call_args_list} == {"ano=2023", "ano=2024"}
+        assert mock_clear.call_count == 2
+        assert mock_run.rows_read == 2
+        assert mock_run.rows_written == 2
+        # Hook de qualidade roda sobre a tabela integrada, uma vez por execução.
+        mock_quality.assert_called_once()
+        assert mock_quality.call_args.args[0] == "alfabetizacao_municipio_integrado"
+
+    def test_meta_do_ano_vem_da_versao_vigente(self):
+        _, _, _, mock_write = self._run(self._municipio_silver(), self._meta_scd2())
+        escrita_2024 = next(c.args[2] for c in mock_write.call_args_list if c.args[1] == "ano=2024")
+        row = escrita_2024.to_pylist()[0]
+        assert row["meta_indicador"] == 75.0
+        assert row["percentual_participacao"] == 95.0
+        # 2023 está fora do horizonte de colunas de meta — meta_indicador NULL.
+        escrita_2023 = next(c.args[2] for c in mock_write.call_args_list if c.args[1] == "ano=2023")
+        assert escrita_2023.to_pylist()[0]["meta_indicador"] is None
+
+    def test_without_meta_table_meta_columns_are_null(self):
+        """Sem a Silver de meta processada, o JOIN é contra relação vazia —
+        o indicador sobrevive com as colunas de meta NULL."""
+        _, _, _, mock_write = self._run(self._municipio_silver(), None)
+        escrita_2024 = next(c.args[2] for c in mock_write.call_args_list if c.args[1] == "ano=2024")
+        row = escrita_2024.to_pylist()[0]
+        assert row["meta_indicador"] is None
+        assert row["nivel_alfabetizacao"] is None
+
+    def test_empty_municipio_writes_nothing(self):
+        mock_run, mock_quality, mock_clear, mock_write = self._run(pa.Table.from_pydict({}), self._meta_scd2())
+        mock_write.assert_not_called()
+        mock_clear.assert_not_called()
+        mock_quality.assert_not_called()
+        assert mock_run.rows_written == 0
+
+    def test_critical_dq_failure_marks_run_status(self):
+        from quality.translate import QualityResult
+
+        falha_critica = QualityResult(
+            check_id="alfabetizacao_municipio_integrado.duplicidade", check="duplicidade",
+            entidade="alfabetizacao_municipio_integrado", dimensao="Unicidade",
+            passou=False, valor_medido=0.5, limiar=1.0, severidade="CRITICA", linhas_afetadas=1,
+        )
+        from silver.pipeline import run_integracao
+
+        mock_log, mock_run = _mock_log_execution()
+        with patch("silver.pipeline.gcs_lock", new=_mock_lock()), \
+             patch("silver.pipeline.log_execution", mock_log), \
+             patch("silver.pipeline.silver_reader.read_entity", return_value=self._municipio_silver()), \
+             patch("silver.pipeline.silver_reader.read_scd2_table_raw", return_value=self._meta_scd2()), \
+             patch("quality.pipeline.run_entity_quality_checks", return_value=[falha_critica]), \
+             patch("silver.pipeline.silver_writer.clear_entity"), \
+             patch("silver.pipeline.silver_writer.write_entity", side_effect=lambda *a: 1):
+            run_integracao()
+
+        assert mock_run.status == "SUCCESS_WITH_DQ_FAILURE"

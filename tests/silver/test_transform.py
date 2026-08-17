@@ -7,6 +7,7 @@ from silver.transform import (
     clean,
     dedupe,
     group_by_ano,
+    integrate_alfabetizacao_municipio,
     normalize_key,
 )
 
@@ -277,3 +278,103 @@ class TestApplyScd2:
         for row in dimensao.to_pylist():
             if row["valid_to"] is not None:
                 assert row["valid_to"] >= row["valid_from"], row
+
+
+class TestIntegrateAlfabetizacaoMunicipio:
+    """JOIN real entre indicador observado e trajetória de meta (SCD2) —
+    fontes distintas cruzadas na chave territorial com versão vigente por ano."""
+
+    def _indicador(self) -> pa.Table:
+        return pa.table({
+            "ano": [2023, 2024, 2025],
+            "id_municipio": ["3550308", "3550308", "3550308"],
+            "rede": ["1", "1", "1"],
+            "serie": ["2", "2", "2"],
+            "taxa_alfabetizacao": [70.0, 80.0, 85.0],
+            "media_portugues": [650.0, 700.0, 710.0],
+        })
+
+    def _meta_duas_versoes(self) -> pa.Table:
+        """v1 vigente em 2023; v2 abre em 2024 e permanece vigente."""
+        return pa.table({
+            "ano": [2023, 2024],
+            "id_municipio": ["3550308", "3550308"],
+            "rede": ["1", "1"],
+            "meta_alfabetizacao_2024": [70.0, 75.0],
+            "meta_alfabetizacao_2025": [72.0, 78.0],
+            "percentual_participacao": [90.0, 95.0],
+            "nivel_alfabetizacao": pa.array([1, 2], type=pa.int64()),
+            "valid_from": pa.array([2023, 2024], type=pa.int64()),
+            "valid_to": pa.array([2024, None], type=pa.int64()),
+            "is_current": [False, True],
+        })
+
+    def test_join_temporal_escolhe_versao_vigente_do_ano(self):
+        integrada = integrate_alfabetizacao_municipio(self._indicador(), self._meta_duas_versoes())
+        por_ano = {r["ano"]: r for r in integrada.to_pylist()}
+        assert por_ano[2023]["percentual_participacao"] == 90.0  # v1
+        assert por_ano[2024]["percentual_participacao"] == 95.0  # v2
+        assert por_ano[2024]["meta_indicador"] == 75.0
+        assert por_ano[2024]["nivel_alfabetizacao"] == 2
+
+    def test_ano_sem_versao_nova_herda_versao_anterior(self):
+        """2025 não tem linha própria na SCD2 — herda v2 (valid_to NULL)."""
+        integrada = integrate_alfabetizacao_municipio(self._indicador(), self._meta_duas_versoes())
+        por_ano = {r["ano"]: r for r in integrada.to_pylist()}
+        assert por_ano[2025]["percentual_participacao"] == 95.0
+        assert por_ano[2025]["meta_indicador"] == 78.0
+
+    def test_ano_fora_do_horizonte_da_meta_tem_meta_indicador_null(self):
+        """2023 é anterior a 2024 — não existe coluna meta_alfabetizacao_2023,
+        então meta_indicador é NULL (não há meta definida para aquele ano)."""
+        integrada = integrate_alfabetizacao_municipio(self._indicador(), self._meta_duas_versoes())
+        por_ano = {r["ano"]: r for r in integrada.to_pylist()}
+        assert por_ano[2023]["meta_indicador"] is None
+
+    def test_municipio_sem_meta_tem_colunas_de_meta_null(self):
+        indicador = pa.table({
+            "ano": [2024], "id_municipio": ["9999999"], "rede": ["1"], "serie": ["2"],
+            "taxa_alfabetizacao": [80.0],
+        })
+        integrada = integrate_alfabetizacao_municipio(indicador, self._meta_duas_versoes())
+        row = integrada.to_pylist()[0]
+        assert row["taxa_alfabetizacao"] == 80.0
+        assert row["meta_indicador"] is None
+        assert row["percentual_participacao"] is None
+        assert row["nivel_alfabetizacao"] is None
+
+    def test_meta_ausente_gera_colunas_de_meta_null(self):
+        """Sem a tabela de meta processada, o indicador sobrevive íntegro —
+        ausência de meta é achado analítico, não motivo para derrubar o pipeline."""
+        integrada = integrate_alfabetizacao_municipio(self._indicador(), None)
+        assert integrada.num_rows == 3
+        for row in integrada.to_pylist():
+            assert row["meta_indicador"] is None
+            assert row["percentual_participacao"] is None
+
+    def test_meta_eh_broadcast_para_todas_as_series(self):
+        """A meta municipal não tem série — o mesmo valor vale para cada série
+        do indicador (grão mais fino recebe a meta do grão mais grosso)."""
+        indicador = pa.table({
+            "ano": [2024, 2024],
+            "id_municipio": ["3550308", "3550308"],
+            "rede": ["1", "1"],
+            "serie": ["1", "2"],
+            "taxa_alfabetizacao": [80.0, 85.0],
+        })
+        integrada = integrate_alfabetizacao_municipio(indicador, self._meta_duas_versoes())
+        assert integrada.num_rows == 2
+        for row in integrada.to_pylist():
+            assert row["meta_indicador"] == 75.0
+
+    def test_grao_preservado_um_a_um(self):
+        integrada = integrate_alfabetizacao_municipio(self._indicador(), self._meta_duas_versoes())
+        assert integrada.num_rows == 3
+        graos = [(r["ano"], r["id_municipio"], r["rede"], r["serie"]) for r in integrada.to_pylist()]
+        assert len(graos) == len(set(graos))
+
+    def test_indicador_vazio_retorna_vazio(self):
+        vazio = pa.Table.from_pydict({})
+        integrada = integrate_alfabetizacao_municipio(vazio, self._meta_duas_versoes())
+        assert integrada.num_rows == 0
+        assert integrada.column_names == []

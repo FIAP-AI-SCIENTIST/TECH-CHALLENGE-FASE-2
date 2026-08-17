@@ -26,7 +26,40 @@ DEDUPE_KEYS: dict[str, list[str]] = {
     "meta_alfabetizacao_brasil": ["ano", "rede"],
     "meta_alfabetizacao_uf": ["ano", "sigla_uf", "rede"],
     "meta_alfabetizacao_municipio": ["ano", "id_municipio", "rede"],
+    # A integrada não passa por `dedupe` (nasce de fontes já deduplicadas); a
+    # chave fica registrada aqui porque `quality/rules.py` a consome como
+    # restrição de unicidade do grão.
+    "alfabetizacao_municipio_integrado": ["ano", "id_municipio", "rede", "serie"],
 }
+
+# Tabela derivada que cruza indicador municipal x meta municipal (entidades
+# distintas da fonte) — a integracao de fato, nao lookup de diretorio.
+ENTIDADE_INTEGRADA = "alfabetizacao_municipio_integrado"
+
+# Colunas herdadas do indicador municipal, na ordem de saída da integrada.
+_COLUNAS_INDICADOR_INTEGRADA = [
+    "ano",
+    "id_municipio",
+    "rede",
+    "serie",
+    "rede_desc",
+    "serie_desc",
+    "nome",
+    "sigla_uf",
+    "nome_regiao",
+    "capital_uf",
+    "taxa_alfabetizacao",
+    "media_portugues",
+    "proporcao_aluno_nivel_0",
+    "proporcao_aluno_nivel_1",
+    "proporcao_aluno_nivel_2",
+    "proporcao_aluno_nivel_3",
+    "proporcao_aluno_nivel_4",
+    "proporcao_aluno_nivel_5",
+    "proporcao_aluno_nivel_6",
+    "proporcao_aluno_nivel_7",
+    "proporcao_aluno_nivel_8",
+]
 
 # Chave natural do SCD2 (sem `ano` — é o que muda de versão).
 SCD2_NATURAL_KEYS: dict[str, list[str]] = {
@@ -293,3 +326,69 @@ def apply_scd2(entidade: str, dimension_atual: pa.Table, incoming: pa.Table, ano
     if not resultado:
         return pa.Table.from_pylist([], schema=schema_final)
     return pa.Table.from_pylist(resultado, schema=schema_final)
+
+
+def _meta_column_expr(meta_columns: list[str], col: str, tipo: str) -> str:
+    """Projeta `m.<col>` quando existe na SCD2, senão um NULL tipado — mantém o
+    schema da integrada estável mesmo se a fonte de meta vier sem a coluna."""
+    if col in meta_columns:
+        return f"m.{col}"
+    return f"CAST(NULL AS {tipo})"
+
+
+def integrate_alfabetizacao_municipio(municipio: pa.Table, meta_scd2: pa.Table | None) -> pa.Table:
+    """Integra indicador municipal x meta municipal — JOIN real entre duas
+    entidades distintas da fonte (nao lookup de diretorio).
+
+    Grão de saída: `(ano, id_municipio, rede, serie)` (o do indicador). A meta,
+    de grão mais grosso `(ano, id_municipio, rede)`, é localizada pelo JOIN
+    temporal sobre a cadeia SCD2 — a versão vigente no ano do indicador
+    (`valid_from <= ano < valid_to`) — e sofre broadcast para as séries do
+    mesmo `(ano, id_municipio, rede)`.
+
+    LEFT JOIN a partir do indicador: município com resultado mas sem meta
+    vigente permanece, com as colunas de meta NULL. `meta_indicador` é a meta
+    do próprio ano da linha (`meta_alfabetizacao_{ano}`), NULL fora do
+    horizonte 2024-2030 (anos sem coluna de meta correspondente).
+    """
+    if not municipio.column_names or municipio.num_rows == 0:
+        return pa.Table.from_pydict({})
+
+    select_parts = [f"i.{c}" for c in _COLUNAS_INDICADOR_INTEGRADA if c in municipio.column_names]
+    meta_columns = meta_scd2.column_names if meta_scd2 is not None else []
+
+    anos_meta = sorted(
+        int(c.rsplit("_", 1)[1]) for c in meta_columns if c.startswith("meta_alfabetizacao_")
+    )
+    if anos_meta and meta_columns:
+        case_expr = " ".join(f"WHEN {ano} THEN m.meta_alfabetizacao_{ano}" for ano in anos_meta)
+        select_parts.append(f"(CASE i.ano {case_expr} END) AS meta_indicador")
+    else:
+        select_parts.append("CAST(NULL AS DOUBLE) AS meta_indicador")
+    select_parts.append(_meta_column_expr(meta_columns, "percentual_participacao", "DOUBLE") + " AS percentual_participacao")
+    select_parts.append(_meta_column_expr(meta_columns, "nivel_alfabetizacao", "BIGINT") + " AS nivel_alfabetizacao")
+
+    conn = duckdb.connect(":memory:")
+    conn.register("indicador", municipio)
+
+    if meta_scd2 is None or meta_scd2.num_rows == 0:
+        # Sem cadeia SCD2 gravada, o JOIN é contra relação vazia — mesmo
+        # resultado (tudo NULL nas colunas de meta), sem SQL especial.
+        meta_scd2 = pa.table({
+            "id_municipio": pa.array([], type=pa.string()),
+            "rede": pa.array([], type=pa.string()),
+            "valid_from": pa.array([], type=pa.int64()),
+            "valid_to": pa.array([], type=pa.int64()),
+        })
+    conn.register("meta", meta_scd2)
+
+    sql = f"""
+        SELECT {", ".join(select_parts)}
+        FROM indicador i
+        LEFT JOIN meta m
+          ON i.id_municipio = m.id_municipio
+         AND i.rede = m.rede
+         AND i.ano >= m.valid_from
+         AND (m.valid_to IS NULL OR i.ano < m.valid_to)
+    """
+    return conn.sql(sql).to_arrow_table()

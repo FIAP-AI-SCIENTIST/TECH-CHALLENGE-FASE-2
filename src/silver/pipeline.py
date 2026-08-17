@@ -8,9 +8,11 @@ from bronze import reader as bronze_reader
 from common.lock import gcs_lock
 from config import get_settings
 from observability.logging import log_execution, setup_logger
+from silver import reader as silver_reader
 from silver import reference
 from silver import writer as silver_writer
 from silver.transform import (
+    ENTIDADE_INTEGRADA,
     ENTIDADES_META,
     ENTIDADES_REGULARES,
     _with_scd2_columns,
@@ -18,6 +20,7 @@ from silver.transform import (
     clean,
     dedupe,
     group_by_ano,
+    integrate_alfabetizacao_municipio,
 )
 
 ENTIDADES = [
@@ -124,9 +127,52 @@ def run_silver(entidade: str) -> None:
                 logger.error(f"Data Quality com falha CRITICA em '{entidade}' — ver data_quality_log.")
 
 
+def run_integracao() -> None:
+    """Constrói a tabela integrada da Silver: indicador municipal x meta
+    municipal (JOIN temporal sobre a cadeia SCD2), particionada por `ano=`.
+
+    Roda sobre o **estado Silver** das duas entidades de insumo — não sobre a
+    Bronze — então herda limpeza, normalização de chave e deduplicação já
+    aplicadas. Clear+write por partição a cada execução: a integrada é função
+    pura do estado Silver, sem estado próprio.
+    """
+    logger = setup_logger()
+
+    with gcs_lock(get_settings().bucket_name, f"silver/.locks/{ENTIDADE_INTEGRADA}.lock"):
+        with log_execution(step="Silver", layer="Silver") as run:
+            municipio = silver_reader.read_entity("municipio")
+            meta = silver_reader.read_scd2_table_raw("meta_alfabetizacao_municipio")
+
+            integrada = integrate_alfabetizacao_municipio(municipio, meta)
+
+            run.rows_read = municipio.num_rows
+            run.rows_written = 0
+
+            if integrada.num_rows == 0:
+                # Sem indicador processado não há o que integrar — mantém o
+                # estado já gravado em vez de apagar partições por um insumo
+                # vazio (que pode ser leitura transitória, não fonte vazia).
+                logger.warning(f"Integração '{ENTIDADE_INTEGRADA}' sem saída — 'municipio' vazio ou não processado.")
+                return
+
+            for ano, tabela_ano in group_by_ano(integrada).items():
+                chave = f"ano={ano}"
+                silver_writer.clear_entity(ENTIDADE_INTEGRADA, chave)
+                run.rows_written += silver_writer.write_entity(ENTIDADE_INTEGRADA, chave, tabela_ano)
+
+            from quality.pipeline import run_entity_quality_checks
+
+            dq_results = run_entity_quality_checks(ENTIDADE_INTEGRADA, integrada)
+            if any(not r.passou and r.severidade == "CRITICA" for r in dq_results):
+                run.status = "SUCCESS_WITH_DQ_FAILURE"
+                logger.error(f"Data Quality com falha CRITICA em '{ENTIDADE_INTEGRADA}' — ver data_quality_log.")
+
+
 def run_all_silver() -> None:
     """Processa as 6 entidades com isolamento de falha (mesmo padrão do
-    `make bronze`): uma entidade falhando não impede as demais.
+    `make bronze`): uma entidade falhando não impede as demais. A tabela
+    integrada só é reconstruída se todas as 6 tiverem sucesso — ela é
+    derivada, e insumo parcial não deve gerar saída parcial.
     """
     logger = setup_logger()
     falhou = False
@@ -137,6 +183,13 @@ def run_all_silver() -> None:
         except Exception as exc:
             falhou = True
             logger.error(f"Falha processando '{entidade}' na Silver: {type(exc).__name__}: {exc}")
+
+    if not falhou:
+        try:
+            run_integracao()
+        except Exception as exc:
+            falhou = True
+            logger.error(f"Falha na integração da Silver: {type(exc).__name__}: {exc}")
 
     if falhou:
         raise RuntimeError("Uma ou mais entidades falharam no processamento da Silver — ver logs.")
