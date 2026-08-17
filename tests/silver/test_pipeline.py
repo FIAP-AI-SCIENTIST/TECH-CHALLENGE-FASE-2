@@ -59,6 +59,59 @@ class TestRunSilverRegularEntity:
         assert mock_run.rows_written == 2
 
 
+class TestRunSilverStreamingColumn:
+    """`data_evento` é coluna exclusiva da Bronze: quando a entidade recebeu
+    ingestão pelos dois caminhos, o reader da Bronze devolve a união dos schemas
+    e a Silver tem de descartar o event time antes de transformar — senão o
+    schema escrito passaria a depender de ter havido micro-batch de streaming
+    antes daquela execução.
+    """
+
+    def test_drops_event_time_column_and_keeps_schema_stable(self):
+        from datetime import datetime, timezone
+
+        colunas_negocio = {
+            "ano": [2024, 2024],
+            "sigla_uf": ["SP", "RJ"],
+            "serie": ["2", "2"],
+            "rede": ["0", "0"],
+        }
+        # Como a Bronze devolve depois da promoção de schema: linha de batch com
+        # event time nulo, linha de streaming com o publish_time do Pub/Sub.
+        bruta_com_streaming = pa.table({
+            **colunas_negocio,
+            "data_evento": pa.array(
+                [None, datetime(2026, 8, 17, 10, 30, tzinfo=timezone.utc)],
+                type=pa.timestamp("us", tz="UTC"),
+            ),
+        })
+        bruta_so_batch = pa.table(colunas_negocio)
+
+        def _executa(bruta):
+            mock_log, mock_run = _mock_log_execution()
+            with patch("silver.pipeline.gcs_lock", new=_mock_lock()), \
+                 patch("silver.pipeline.log_execution", mock_log), \
+                 patch("silver.pipeline.bronze_reader.read_partition", return_value=bruta), \
+                 patch("silver.pipeline.reference.get_dicionario", return_value=({}, 0)), \
+                 patch("silver.pipeline.reference.get_diretorio_uf", return_value=({}, 0)), \
+                 patch("quality.pipeline.run_entity_quality_checks", return_value=[]), \
+                 patch("silver.pipeline.silver_writer.clear_entity"), \
+                 patch("silver.pipeline.silver_writer.write_entity", return_value=2) as mock_write:
+                run_silver("uf")
+            return mock_write.call_args.args[2], mock_run
+
+        escrita_com_streaming, run_com_streaming = _executa(bruta_com_streaming)
+        escrita_so_batch, _ = _executa(bruta_so_batch)
+
+        assert "data_evento" not in escrita_com_streaming.schema.names
+        # Idempotência de schema: a presença de partição de streaming na Bronze
+        # não muda o schema de saída da camada.
+        assert escrita_com_streaming.schema.names == escrita_so_batch.schema.names
+        # O descarte é de coluna, não de linha — as 2 linhas seguem contadas.
+        assert run_com_streaming.rows_read == 2
+        assert escrita_com_streaming.num_rows == 2
+
+
 class TestRunSilverQualityHook:
     """Integração Data Quality: run_silver propaga falha CRITICA de Data Quality para a
     auditoria (SUCCESS_WITH_DQ_FAILURE) sem desfazer a escrita."""

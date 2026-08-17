@@ -167,7 +167,7 @@ make quality                                     # checks de qualidade (Silver +
 make quality-gate                                # idem, mas bloqueante: sai com erro se houver falha CRITICA
 
 make pipeline                                    # infra-apply + bronze -> silver -> gold -> quality num comando
-make pipeline-from-scratch                       # derruba e recria a infra e roda o ciclo completo (batch + streaming + gate bloqueante)
+make pipeline-from-scratch                       # derruba e recria a infra e roda o ciclo completo: batch -> streaming -> reprocessa Silver/Gold -> gate bloqueante
 ```
 
 Em produção, o Producer roda sozinho via Cloud Scheduler → Cloud Function (sem intervenção manual); o Consumer, por ora, roda sob demanda (`make streaming-consumer`) — um pull single-shot não tem o mesmo encaixe natural de agendamento que o Producer tem.

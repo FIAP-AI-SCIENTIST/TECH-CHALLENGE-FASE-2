@@ -113,11 +113,13 @@ def consume_batch(max_messages: int = 10) -> None:
             modelo = itens[0][1]
             schema = to_pyarrow_schema(modelo)
             table = to_pyarrow_table(instancias, schema)
-            # data_evento fica fora dos contratos Pydantic de propósito: ela só
-            # existe no streaming (a extração batch não tem event time), e as
-            # partições data_ingestao= da Bronze não são lidas pela Silver —
-            # colocar o campo no modelo compartilhado propagaria uma coluna
-            # toda nula para as camadas de batch.
+            # `data_evento` fica fora dos contratos Pydantic de propósito: o
+            # event time só existe no streaming (a extração batch não tem), e
+            # colocá-lo no modelo compartilhado propagaria uma coluna sempre nula
+            # às linhas de batch. A Silver **lê** estas partições (`read_partition`
+            # sem chave devolve `ano=` e `data_ingestao=` juntas, com os schemas
+            # promovidos) e descarta esta coluna na entrada, para que o schema da
+            # camada não dependa de ter havido micro-batch antes da execução.
             table = table.append_column(
                 pa.field("data_evento", pa.timestamp("us", tz="UTC"), nullable=False),
                 pa.array([publish_time for _i, _m, _a, publish_time in itens], type=pa.timestamp("us", tz="UTC")),

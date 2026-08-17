@@ -79,6 +79,17 @@ def run_silver(entidade: str) -> None:
             bruta = bronze_reader.read_partition(entidade)
             rows_read = bruta.num_rows
 
+            # `data_evento` (event time do Pub/Sub) existe só nas partições de
+            # streaming da Bronze e é descartada aqui, na fronteira de entrada da
+            # camada. Mantê-la faria o schema escrito na Silver depender de ter
+            # havido micro-batch de streaming antes desta execução — a mesma
+            # entidade sairia com ou sem a coluna conforme a ordem dos runs, e
+            # Gold e qualidade leem essas partições. A Bronze preserva o event
+            # time indefinidamente, que é onde ele tem significado (a latência é
+            # medida entre `data_evento` e a partição `data_ingestao=`).
+            if "data_evento" in bruta.schema.names:
+                bruta = bruta.drop_columns(["data_evento"])
+
             referencias, total_bytes = _load_referencias(entidade)
             limpa, rejeitadas = clean(entidade, bruta, referencias)
             if rejeitadas:

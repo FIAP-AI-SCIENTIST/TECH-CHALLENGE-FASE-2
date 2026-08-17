@@ -150,6 +150,15 @@ pipeline: infra-apply
 # as camadas batch (Bronze → Silver → Gold → Quality, via `pipeline`) e em
 # seguida o streaming: o producer publica eventos sintéticos de cada tipo e o
 # consumer grava o micro-batch na Bronze já com o event time (data_evento).
+#
+# Depois do consumer as camadas derivadas rodam DE NOVO (silver → gold), e é o
+# que faz a ingestão híbrida significar algo: os eventos publicados agora estão
+# na Bronze em partições `data_ingestao=`, e sem reprocessar eles ficariam
+# parados ali, fora de Silver, Gold e da avaliação de qualidade. A ordem não
+# pode ser invertida (streaming antes do batch) porque é a segunda passada da
+# Silver que prova o caminho: ela aparece como uma segunda execução em
+# pipeline_audit_log, com rows_read maior que a primeira.
+#
 # Fecha com o gate bloqueante sobre o estado final: num ciclo from-scratch o
 # que se quer é o veredito — se houver falha CRITICA, o Make sai com erro e a
 # evidência fica em data_quality_log. Para a versão que só registra e segue,
@@ -163,4 +172,6 @@ pipeline-from-scratch:
 	$(MAKE) streaming-producer TIPO=meta N=2
 	$(MAKE) streaming-producer TIPO=medicao N=2
 	$(MAKE) streaming-consumer
+	$(MAKE) silver
+	$(MAKE) gold
 	$(MAKE) quality-gate

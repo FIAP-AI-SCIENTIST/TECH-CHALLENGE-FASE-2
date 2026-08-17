@@ -1,6 +1,7 @@
 """Testes do módulo bronze.reader — leitura de partições Parquet do GCS."""
 
 import io
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pyarrow as pa
@@ -165,6 +166,49 @@ class TestReadPartition:
 
         # Concatena tabelas de 2 partições
         assert result.num_rows == 2
+
+    def test_unions_batch_and_streaming_schemas(self):
+        """Regressão: a mesma entidade recebe ingestão batch (`ano=`, sem
+        `data_evento`) e streaming (`data_ingestao=`, com `data_evento`). Ler a
+        entidade inteira tem de unir os dois schemas em vez de falhar com
+        `ArrowInvalid: Schema mismatch` — é a leitura que a Silver faz.
+        """
+        buf_batch = io.BytesIO()
+        pq.write_table(pa.table({"ano": [2023], "valor": [1.0]}), buf_batch)
+
+        buf_streaming = io.BytesIO()
+        pq.write_table(
+            pa.table({
+                "ano": [2024],
+                "valor": [2.0],
+                "data_evento": pa.array(
+                    [datetime(2026, 8, 17, 10, 30, tzinfo=timezone.utc)],
+                    type=pa.timestamp("us", tz="UTC"),
+                ),
+            }),
+            buf_streaming,
+        )
+
+        blob_batch = MagicMock()
+        blob_batch.name = "bronze/uf/ano=2023/part-0.parquet"
+        blob_batch.download_as_bytes.return_value = buf_batch.getvalue()
+
+        blob_streaming = MagicMock()
+        blob_streaming.name = "bronze/uf/data_ingestao=2026-08-17/part-run-a.parquet"
+        blob_streaming.download_as_bytes.return_value = buf_streaming.getvalue()
+
+        with patch("bronze.reader.storage.Client") as mock_client_cls:
+            mock_bucket = MagicMock()
+            mock_client_cls.return_value.bucket.return_value = mock_bucket
+            mock_bucket.list_blobs.return_value = [blob_batch, blob_streaming]
+
+            result = read_partition("uf")
+
+        assert result.num_rows == 2
+        assert "data_evento" in result.schema.names
+        # A linha de batch não tem event time: a coluna promovida vira nula ali,
+        # em vez de a leitura inteira falhar.
+        assert result.column("data_evento").to_pylist()[0] is None
 
     def test_skips_non_parquet_files(self):
         mock_blob = MagicMock()
