@@ -5,9 +5,12 @@ o DDL é dado, não lógica — testável por assert estrutural, sem executar na
 
 As tabelas Gold continuam pipeline-managed (fora do Terraform): `gold.writer`
 chama `ensure_table` antes do load de cada tabela, e o `CREATE TABLE IF NOT
-EXISTS` garante idempotência sem lock. Partição/clustering/constraints
-sobrevivem ao `WRITE_TRUNCATE` do load job (ele trunca dados, não a definição
-da tabela).
+EXISTS` garante idempotência sem lock. Partição/clustering sobrevivem ao
+`WRITE_TRUNCATE` do load job (ele trunca dados, não a definição da tabela) —
+mas constraints NÃO: o load job regrava o schema a partir do Parquet e remove
+PK/FK (verificado empiricamente). Por isso `gold.writer` chama
+`ensure_constraints` DEPOIS do load, re-aplicando via ALTER TABLE o que o
+load derrubou.
 
 Modelo Kimball: toda dimensão declara `PRIMARY KEY (sk_*) NOT ENFORCED` e todo
 fato declara `FOREIGN KEY (sk_*) REFERENCES dim_* NOT ENFORCED`. NOT ENFORCED
@@ -95,6 +98,20 @@ def _fks(*pares: tuple[str, str, str]) -> list[str]:
     return [_fk(coluna, dim, coluna_dim) for coluna, dim, coluna_dim in pares]
 
 
+# Registry estruturado das FKs por fato — mesma informação que vai no DDL,
+# reusada por `ensure_constraints` para re-aplicar as FKs que o load job
+# WRITE_TRUNCATE remove a cada escrita.
+FACT_FKS: dict[str, list[tuple[str, str, str]]] = {
+    "fact_indicador_uf": [*_FK_UF, *_FK_SERIE, *_FK_REDE, *_FK_TEMPO],
+    "fact_indicador_municipio": [*_FK_MUNICIPIO, *_FK_SERIE, *_FK_REDE, *_FK_TEMPO],
+    "fact_alunos": [*_FK_MUNICIPIO, *_FK_SERIE, *_FK_REDE, *_FK_TEMPO],
+    "fact_alfabetizacao_municipio": [*_FK_TEMPO, *_FK_MUNICIPIO, *_FK_REDE, *_FK_SERIE],
+    "fact_meta_resultado_brasil": [*_FK_REDE, *_FK_TEMPO],
+    "fact_meta_resultado_uf": [*_FK_UF, *_FK_REDE, *_FK_TEMPO],
+    "fact_meta_resultado_municipio": [*_FK_MUNICIPIO, *_FK_REDE, *_FK_TEMPO],
+}
+
+
 def _table_ddl() -> dict[str, str]:
     return {
         # --- Dimensões: PK declarada, sem partição/clustering (minúsculas) ---
@@ -136,7 +153,7 @@ def _table_ddl() -> dict[str, str]:
             "  ano INT64,\n  sigla_uf STRING,\n  serie STRING,\n  rede STRING,\n"
             + _COLUNAS_MEDIDAS_INDICADOR
             + ",\n  sk_uf INT64,\n  sk_serie INT64,\n  sk_rede INT64,\n  sk_tempo INT64",
-            constraints=_fks(*_FK_UF, *_FK_SERIE, *_FK_REDE, *_FK_TEMPO),
+            constraints=_fks(*FACT_FKS["fact_indicador_uf"]),
             cluster="sigla_uf",
         ),
         "fact_indicador_municipio": _ddl(
@@ -144,7 +161,7 @@ def _table_ddl() -> dict[str, str]:
             "  ano INT64,\n  id_municipio STRING,\n  serie STRING,\n  rede STRING,\n"
             + _COLUNAS_MEDIDAS_INDICADOR
             + ",\n  sk_municipio INT64,\n  sk_serie INT64,\n  sk_rede INT64,\n  sk_tempo INT64",
-            constraints=_fks(*_FK_MUNICIPIO, *_FK_SERIE, *_FK_REDE, *_FK_TEMPO),
+            constraints=_fks(*FACT_FKS["fact_indicador_municipio"]),
             cluster="id_municipio",
         ),
         "fact_alunos": _ddl(
@@ -165,7 +182,7 @@ def _table_ddl() -> dict[str, str]:
   sk_serie INT64,
   sk_rede INT64,
   sk_tempo INT64""",
-            constraints=_fks(*_FK_MUNICIPIO, *_FK_SERIE, *_FK_REDE, *_FK_TEMPO),
+            constraints=_fks(*FACT_FKS["fact_alunos"]),
             cluster="id_municipio",
         ),
         "fact_alfabetizacao_municipio": _ddl(
@@ -182,27 +199,27 @@ def _table_ddl() -> dict[str, str]:
   sk_municipio INT64,
   sk_rede INT64,
   sk_serie INT64""",
-            constraints=_fks(*_FK_TEMPO, *_FK_MUNICIPIO, *_FK_REDE, *_FK_SERIE),
+            constraints=_fks(*FACT_FKS["fact_alfabetizacao_municipio"]),
             cluster="id_municipio",
         ),
         "fact_meta_resultado_brasil": _ddl(
             "fact_meta_resultado_brasil",
             "  rede STRING,\n" + _COLUNAS_META_RESULTADO + ",\n  sk_rede INT64,\n  sk_tempo INT64",
-            constraints=_fks(*_FK_REDE, *_FK_TEMPO),
+            constraints=_fks(*FACT_FKS["fact_meta_resultado_brasil"]),
             # Sem clustering: chave `rede` tem cardinalidade ~4.
         ),
         "fact_meta_resultado_uf": _ddl(
             "fact_meta_resultado_uf",
             "  sigla_uf STRING,\n  rede STRING,\n" + _COLUNAS_META_RESULTADO
             + ",\n  sk_uf INT64,\n  sk_rede INT64,\n  sk_tempo INT64",
-            constraints=_fks(*_FK_UF, *_FK_REDE, *_FK_TEMPO),
+            constraints=_fks(*FACT_FKS["fact_meta_resultado_uf"]),
             cluster="sigla_uf",
         ),
         "fact_meta_resultado_municipio": _ddl(
             "fact_meta_resultado_municipio",
             "  id_municipio STRING,\n  rede STRING,\n" + _COLUNAS_META_RESULTADO
             + ",\n  sk_municipio INT64,\n  sk_rede INT64,\n  sk_tempo INT64",
-            constraints=_fks(*_FK_MUNICIPIO, *_FK_REDE, *_FK_TEMPO),
+            constraints=_fks(*FACT_FKS["fact_meta_resultado_municipio"]),
             cluster="id_municipio",
         ),
     }
@@ -238,16 +255,30 @@ def _table_has_primary_key(client: bigquery.Client, nome_tabela: str) -> bool | 
         tabela = client.get_table(table_ref)
     except Exception:
         return None
-    return bool(tabela.table_constraints)
+    constraints = tabela.table_constraints
+    return bool(constraints and constraints.primary_key)
+
+
+def _existing_fk_pairs(tabela: bigquery.Table) -> set[tuple[str, str]]:
+    """{(coluna_no_fato, dim_referenciada)} das FKs presentes na tabela."""
+    constraints = tabela.table_constraints
+    if not constraints or not constraints.foreign_keys:
+        return set()
+    pares: set[tuple[str, str]] = set()
+    for fk in constraints.foreign_keys:
+        dim = fk.referenced_table.table_id
+        for ref in fk.column_references:
+            pares.add((ref.referencing_column, dim))
+    return pares
 
 
 def _add_primary_key(client: bigquery.Client, nome_tabela: str) -> None:
-    """Evolui uma dim existente (criada antes das constraints) adicionando a PK.
+    """(Re)adiciona a PK de uma dim via ALTER TABLE.
 
-    `CREATE TABLE IF NOT EXISTS` não altera tabela existente — sem este passo,
-    um dataset que já tinha as dims antigas (sem PK) fazia os fatos falharem
-    ao declarar FK. Idempotente: se a PK já existir, o ALTER falha com
-    "already exists" e é ignorado.
+    Necessário porque o load job WRITE_TRUNCATE remove a constraint a cada
+    escrita — inclusive a de dims recém-criadas, cujo DDL declara PK. Sem PK
+    na dim, os fatos falham ao declarar FK. Idempotente: se a PK já existir,
+    o ALTER falha com "already exists" e é ignorado.
     """
     settings = get_settings()
     sk_col = f"sk_{nome_tabela.removeprefix('dim_')}"
@@ -263,28 +294,61 @@ def _add_primary_key(client: bigquery.Client, nome_tabela: str) -> None:
         raise
 
 
+def _add_foreign_key(client: bigquery.Client, nome_tabela: str, coluna: str, dim: str, coluna_dim: str) -> None:
+    """(Re)adiciona uma FK de fato via ALTER TABLE — mesmo motivo de
+    `_add_primary_key`: o load job WRITE_TRUNCATE remove as FKs a cada escrita.
+    """
+    settings = get_settings()
+    sql = (
+        f"ALTER TABLE `{settings.project_id}.{settings.dataset_id}.{nome_tabela}` "
+        f"ADD FOREIGN KEY ({coluna}) "
+        f"REFERENCES `{settings.project_id}.{settings.dataset_id}.{dim}`({coluna_dim}) NOT ENFORCED"
+    )
+    try:
+        run_ddl(client, sql)
+    except Exception as exc:
+        if "already exists" in str(exc).lower():
+            return
+        raise
+
+
 def ensure_table(client: bigquery.Client, nome_tabela: str) -> None:
     """Garante que `nome_tabela` existe com o DDL do registry (partição,
-    clustering, constraints).
+    clustering, constraints) — chamado ANTES do load.
 
-    - Não existe → cria com o DDL completo (`CREATE TABLE IF NOT EXISTS`).
-    - Existe sem PK (dim criada antes das constraints) → adiciona a PK via
-      ALTER TABLE, para que os fatos consigam declarar FK.
-
-    Sem lock: DDL de criação/evolução não corrompe estado. Como os fatos
-    declaram FK, a tabela referenciada precisa existir com PK: `run_gold`
-    materializa as dimensões antes dos fatos.
+    `CREATE TABLE IF NOT EXISTS` é idempotente e não altera tabela existente;
+    constraints que o load anterior derrubou são re-aplicadas depois do load
+    por `ensure_constraints` (adicioná-las aqui seria inútil: o load as
+    removeria em seguida).
     """
     ddl = TABLE_DDL.get(nome_tabela)
     if ddl is None:
         return
+    run_ddl(client, ddl)
+
+
+def ensure_constraints(client: bigquery.Client, nome_tabela: str) -> None:
+    """Re-aplica PK (dims) / FKs (fatos) que o load job WRITE_TRUNCATE removeu
+    — chamado DEPOIS do load.
+
+    Sem lock: ALTER TABLE ADD CONSTRAINT é idempotente e não corrompe estado.
+    A ordem de `run_gold` (dims antes dos fatos) garante que a dim referenciada
+    já está com PK quando o fato re-declara a FK.
+    """
+    if nome_tabela not in TABLE_DDL:
+        return
 
     if nome_tabela.startswith("dim_"):
-        tem_pk = _table_has_primary_key(client, nome_tabela)
-        if tem_pk is False:
+        if _table_has_primary_key(client, nome_tabela) is False:
             _add_primary_key(client, nome_tabela)
-            return
-        if tem_pk is True:
-            return
+        return
 
-    run_ddl(client, ddl)
+    fks = FACT_FKS.get(nome_tabela)
+    if not fks:
+        return
+    settings = get_settings()
+    tabela = client.get_table(f"{settings.project_id}.{settings.dataset_id}.{nome_tabela}")
+    existentes = _existing_fk_pairs(tabela)
+    for coluna, dim, coluna_dim in fks:
+        if (coluna, dim) not in existentes:
+            _add_foreign_key(client, nome_tabela, coluna, dim, coluna_dim)

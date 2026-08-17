@@ -6,7 +6,10 @@ não tem estado próprio, é sempre recomputada da Silver. Mesma filosofia de
 posse total de partição usada na Bronze/Silver, aplicada aqui à tabela
 inteira em vez de a uma partição. O dataset já existe via Terraform; as
 tabelas fato são criadas antes do load por `gold.schema.ensure_table` (DDL com
-particionamento/clustering) e as dimensões pelo próprio load job.
+particionamento/clustering/constraints) e as dimensões pelo próprio load job.
+Como o load WRITE_TRUNCATE remove PK/FK (ele regrava o schema a partir do
+Parquet), `gold.schema.ensure_constraints` re-aplica as constraints depois do
+load.
 """
 
 import io
@@ -30,8 +33,8 @@ def write_table(nome_tabela: str, table: pa.Table) -> int:
     client = bigquery.Client(project=settings.project_id)
     table_ref = f"{settings.project_id}.{settings.dataset_id}.{nome_tabela}"
 
-    # Garante partição/clustering antes do load: no-op para dim_* e para
-    # tabelas já criadas — o WRITE_TRUNCATE preserva a definição.
+    # Garante a tabela antes do load: CREATE IF NOT EXISTS é no-op para
+    # tabelas já criadas — o WRITE_TRUNCATE preserva partição/clustering.
     gold_schema.ensure_table(client, nome_tabela)
 
     buffer = io.BytesIO()
@@ -42,6 +45,9 @@ def write_table(nome_tabela: str, table: pa.Table) -> int:
         write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
     )
     _load(client, buffer, table_ref, job_config)
+
+    # O load WRITE_TRUNCATE remove PK/FK — re-aplica depois da carga.
+    gold_schema.ensure_constraints(client, nome_tabela)
     return table.num_rows
 
 

@@ -13,7 +13,8 @@ class TestWriteTable:
         table = pa.table({"sigla_uf": ["SP", "RJ"], "nome": ["São Paulo", "Rio de Janeiro"]})
 
         with patch("gold.writer.bigquery.Client") as mock_client_cls, \
-             patch("gold.writer._load") as mock_load:
+             patch("gold.writer._load") as mock_load, \
+             patch("gold.writer.gold_schema.ensure_constraints"):
             mock_client_cls.return_value = MagicMock()
             rows = write_table("dim_uf", table)
 
@@ -27,7 +28,8 @@ class TestWriteTable:
         table = pa.table({"sigla_uf": ["SP"]})
 
         with patch("gold.writer.bigquery.Client") as mock_client_cls, \
-             patch("gold.writer._load") as mock_load:
+             patch("gold.writer._load") as mock_load, \
+             patch("gold.writer.gold_schema.ensure_constraints"):
             mock_client_cls.return_value = MagicMock()
             write_table("dim_uf", table)
 
@@ -36,13 +38,32 @@ class TestWriteTable:
 
     def test_calls_ensure_table_before_load(self):
         """Toda escrita passa pelo ensure_table (DDL de partição/clustering)
-        antes do load — para dim_* é no-op, para fact_* cria a tabela se ausente."""
+        antes do load — CREATE IF NOT EXISTS é no-op para tabela já criada."""
         table = pa.table({"ano": [2023], "sigla_uf": ["SP"]})
 
         with patch("gold.writer.bigquery.Client"), \
              patch("gold.writer._load"), \
+             patch("gold.writer.gold_schema.ensure_constraints"), \
              patch("gold.writer.gold_schema.ensure_table") as mock_ensure:
             write_table("fact_indicador_uf", table)
 
         mock_ensure.assert_called_once()
         assert mock_ensure.call_args.args[1] == "fact_indicador_uf"
+
+    def test_calls_ensure_constraints_after_load(self):
+        """O load WRITE_TRUNCATE remove PK/FK — constraints são re-aplicadas
+        depois do load, nunca antes (seriam derrubadas em seguida)."""
+        table = pa.table({"ano": [2023], "sigla_uf": ["SP"]})
+        eventos: list[str] = []
+
+        with patch("gold.writer.bigquery.Client"), \
+             patch("gold.writer._load", side_effect=lambda *a: eventos.append("load")), \
+             patch("gold.writer.gold_schema.ensure_table",
+                   side_effect=lambda *a: eventos.append("ensure_table")), \
+             patch("gold.writer.gold_schema.ensure_constraints",
+                   side_effect=lambda *a: eventos.append("ensure_constraints")) as mock_constraints:
+            write_table("fact_indicador_uf", table)
+
+        mock_constraints.assert_called_once()
+        assert mock_constraints.call_args.args[1] == "fact_indicador_uf"
+        assert eventos == ["ensure_table", "load", "ensure_constraints"]

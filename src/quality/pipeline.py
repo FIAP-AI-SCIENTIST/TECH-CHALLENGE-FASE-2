@@ -158,7 +158,7 @@ def run_all_quality_checks(frames: Mapping[str, pd.DataFrame] | None = None, *, 
     com isolamento de falha — uma entidade ilegível não impede as demais.
 
     Sem `frames`, também roda freshness (6 entidades), reconciliação Bronze→Silver (só as 3
-    entidades regulares) e integridade referencial fato×dimensão na Gold (5 pares).
+    entidades regulares) e integridade referencial fato×dimensão na Gold (6 pares).
     """
     if frames is not None:
         return run_quality_checks(frames, writer=writer)
