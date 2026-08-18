@@ -268,7 +268,7 @@ ORDER BY timestamp DESC;
 
 ### Saída real dessas consultas
 
-Capturada em 2026-08-17, 21h40 (BRT), no projeto `useful-space-277919`. A infraestrutura segue ativa — o log é append-only e o Scheduler continua disparando o Producer a cada 10 min — então a consulta 1 exibe novas linhas no topo quando reexecutada.
+Capturada em 2026-08-17, 21h40 (BRT). A infraestrutura segue ativa — o log é append-only e o Scheduler continua disparando o Producer a cada 10 min — então a consulta 1 exibe novas linhas no topo quando reexecutada.
 
 **Consulta 1 — últimas 30 linhas de `pipeline_audit_log`:**
 
