@@ -266,4 +266,104 @@ WHERE severidade = 'CRITICA' AND passou = FALSE
 ORDER BY timestamp DESC;
 ```
 
+### Saída real dessas consultas
+
+Capturada em 2026-08-17, 21h40 (BRT), no projeto `useful-space-277919`. A infraestrutura segue ativa — o log é append-only e o Scheduler continua disparando o Producer a cada 10 min — então a consulta 1 exibe novas linhas no topo quando reexecutada.
+
+**Consulta 1 — últimas 30 linhas de `pipeline_audit_log`:**
+
+```csv
+step,layer,rows_read,rows_written,duration_seconds,status,run_id
+Streaming_Producer,Bronze,NULL,1,0.362,SUCCESS,3cbd1359-75a3-41bb-bb9b-c5b6969a6f2e
+Streaming_Producer,Bronze,NULL,1,0.518,SUCCESS,2dc7cfbb-09a1-4c92-8336-b2c12709cea2
+Streaming_Producer,Bronze,NULL,1,0.281,SUCCESS,e2e39719-3a3b-43b6-9d28-062e81e88f6d
+Streaming_Producer,Bronze,NULL,1,0.326,SUCCESS,1ca6c67f-d8ad-4543-bba5-29fbd6848550
+Streaming_Producer,Bronze,NULL,1,0.394,SUCCESS,70b6a45d-3fe1-42ae-b0de-bf89f64a4ae6
+Streaming_Producer,Bronze,NULL,1,0.348,SUCCESS,ad9a6b9a-556a-43d6-9991-9e99a52694f1
+Streaming_Producer,Bronze,NULL,1,0.385,SUCCESS,fb72efe0-54e1-4d7c-8f35-bb4f8fe887aa
+Streaming_Producer,Bronze,NULL,1,0.335,SUCCESS,1c17dc0c-40f6-4248-a751-cd0e1096d5e5
+Streaming_Producer,Bronze,NULL,1,0.386,SUCCESS,cabdb888-1179-47de-8a30-af07509afff0
+Streaming_Producer,Bronze,NULL,1,0.283,SUCCESS,f08d99e4-14da-43ac-a87b-1a1fbad0457b
+Streaming_Producer,Bronze,NULL,1,0.299,SUCCESS,147ef62c-8863-4bb2-80f4-cbc9ae117788
+Streaming_Producer,Bronze,NULL,1,0.449,SUCCESS,5ff7ffef-82d0-4fb0-b259-c22710c54739
+Streaming_Producer,Bronze,NULL,1,0.312,SUCCESS,7138aa59-2718-426d-9ebf-e3981d3729ea
+Streaming_Producer,Bronze,NULL,1,0.321,SUCCESS,7ffc179b-8e31-4583-9039-1296a32e8d32
+Streaming_Producer,Bronze,NULL,1,0.281,SUCCESS,1415d271-c8d9-4f71-a9ec-654cc0cc4295
+Streaming_Producer,Bronze,NULL,1,0.301,SUCCESS,9048ce92-6f67-437b-87fb-bac8b1a6d4d8
+Streaming_Producer,Bronze,NULL,1,0.353,SUCCESS,723e7785-93ee-41cf-a1e7-673986cfe991
+Streaming_Producer,Bronze,NULL,1,0.347,SUCCESS,c297b9d8-0eb8-4665-8859-042f214882e8
+Gold,Gold,NULL,NULL,2.458,SUCCESS,7b05ac26-fa2f-43b0-b21b-f416e7d99d11
+Gold,Gold,NULL,NULL,2.602,SUCCESS,f0ce744e-3615-48d4-a41a-c16e8785b7cc
+Gold,Gold,NULL,NULL,2.425,SUCCESS,b2d8b013-4f58-40c3-aa5f-04acc8283c97
+Gold,Gold,10700,10700,12.166,SUCCESS,4daf0ba6-9f52-4ba1-9083-f6af94eea9a9
+Gold,Gold,80,80,10.591,SUCCESS,deddbc70-d4e8-4f9e-80d5-77dd16588172
+Gold,Gold,3,3,12.518,SUCCESS,bd1e5f89-e732-4059-b1ca-95d2c471bb40
+Gold,Gold,3868001,3868001,36.364,SUCCESS,61f00241-e401-48ed-befa-12c8d08a4e16
+Gold,Gold,23996,23996,13.565,SUCCESS,b6989ecc-7ee2-4812-9609-c1225e1e88ce
+Gold,Gold,23996,23996,17.83,SUCCESS,45d6e79b-1e62-4bbc-845c-df487fbf1c00
+Gold,Gold,146,146,13.126,SUCCESS,a2ba2c40-7d07-458b-b27a-1d51e81267b1
+Gold,Gold,8,8,9.643,SUCCESS,fcfaf8ef-2d05-4817-b57d-0ff8e5e84212
+Gold,Gold,1,1,11.398,SUCCESS,43691bdc-2b14-44a5-82ed-d0e7019c9622
+```
+
+18 eventos do Producer disparados pelo Scheduler (0,28–0,52 s cada) e 12 das 15 etapas do Gold da última rodada de batch (9,6–36,4 s), todas `SUCCESS`. As etapas de Gold sem contagem de linhas são os marts — views prontas para consumo, sem carga de dados. Nenhuma execução registrada tem status diferente de `SUCCESS`.
+
+**Consulta 2 — falhas críticas no `data_quality_log`:**
+
+```csv
+entidade,check,dimensao,valor_medido,limiar,detalhe
+```
+
+Resultado vazio: nenhuma falha crítica registrada — o gate de qualidade passou.
+
+**Dimensões das tabelas da Gold:**
+
+```csv
+table_id,row_count
+data_quality_log,272
+dim_municipio,5571
+dim_rede,6
+dim_serie,1
+dim_tempo,8
+dim_uf,27
+fact_alfabetizacao_municipio,23996
+fact_alunos,3868001
+fact_indicador_municipio,23996
+fact_indicador_uf,146
+fact_meta_resultado_brasil,3
+fact_meta_resultado_municipio,10700
+fact_meta_resultado_uf,80
+mart_aderencia_metas_uf,0
+mart_evolucao_indicador_uf,0
+mart_ranking_indicador_municipio,0
+pipeline_audit_log,70
+```
+
+O maior fato tem 3.868.001 linhas. Os marts aparecem com `row_count` 0 no metadado porque são views — a amostra abaixo mostra o que devolvem.
+
+**Amostra real de `mart_evolucao_indicador_uf`:**
+
+```sql
+SELECT ano, sigla_uf, taxa_media_alfabetizacao, media_portugues_media, delta_pp_vs_ano_anterior
+FROM `<project_id>.alfabetizacao_analytics.mart_evolucao_indicador_uf`
+ORDER BY ano DESC, sigla_uf
+LIMIT 10;
+```
+
+```csv
+ano,sigla_uf,taxa_media_alfabetizacao,media_portugues_media,delta_pp_vs_ano_anterior
+2026,CE,26.23,1.83,-56.77666666666667
+2024,AC,51.68,739.4433333333333,NULL
+2024,AL,45.86666666666667,732.6133333333333,3.6466666666666683
+2024,AM,51.27333333333333,735.91,-3.403333333333336
+2024,AP,45.153333333333336,737.87,3.776666666666671
+2024,BA,35.585,724.9525,-3.2083333333333357
+2024,CE,83.00666666666667,794.4033333333333,0.44000000000001194
+2024,ES,76.26666666666667,763.0933333333334,6.256666666666675
+2024,GO,76.37666666666667,761.49,6.359999999999999
+2024,MA,65.60666666666667,753.4766666666667,3.873333333333335
+```
+
+A camada analítica responde com o dado real do INEP (2023: 70 linhas; 2024: 75). A única linha de 2026 é o evento sintético publicado pelo Producer (caminho de streaming). `delta_pp_vs_ano_anterior` é NULL no primeiro ano de cada UF, quando não há ano anterior na fonte para o `LAG`.
+
 Rodada completa em GCP em 2026-08-17 (`make pipeline-from-scratch`): 3.902.927 linhas extraídas com zero rejeição de contrato, 0 falhas em 76 checks (212 vereditos) e o Cloud Scheduler disparando o Producer sozinho a cada 10 min — números por etapa, custo real da rodada e cenário de crescimento em [docs/estimativa-de-custos.md](docs/estimativa-de-custos.md#medições-reais-rodada-de-2026-08-17).
