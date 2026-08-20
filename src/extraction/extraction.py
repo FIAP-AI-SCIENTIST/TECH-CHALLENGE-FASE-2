@@ -3,6 +3,7 @@
 import time  # pyright: ignore[reportUnusedImport] - necessario para with_retry (common.retry) interceptar time.sleep neste modulo
 from collections import defaultdict
 from collections.abc import Iterable, Iterator
+from typing import NamedTuple
 
 from google.cloud import bigquery
 from pydantic import ValidationError
@@ -12,14 +13,7 @@ from bronze import writer as bronze_writer
 from common.lock import gcs_lock
 from common.retry import with_retry
 from config import get_settings
-from contracts.models import (
-    DadosAlunosRecord,
-    MetaAlfabetizacaoBrasilRecord,
-    MetaAlfabetizacaoMunicipioRecord,
-    MetaAlfabetizacaoUFRecord,
-    MunicipioRecord,
-    UFRecord,
-)
+from contracts.registry import model_for
 from contracts.schema_mapper import to_pyarrow_schema
 from contracts.serialization import to_pyarrow_table
 from observability.logging import log_execution, setup_logger
@@ -31,13 +25,36 @@ TIMEOUT_SECONDS = 10
 # folga de ~5-10x sobre a maior entidade (~4M linhas); aborta só scan acidental caro.
 MAX_BYTES_BILLED = 10 * 2**30
 
-ENTITY_TABLE_MAP = {
-    "uf": ("uf", UFRecord),
-    "municipio": ("municipio", MunicipioRecord),
-    "meta_alfabetizacao_brasil": ("meta_alfabetizacao_brasil", MetaAlfabetizacaoBrasilRecord),
-    "meta_alfabetizacao_uf": ("meta_alfabetizacao_uf", MetaAlfabetizacaoUFRecord),
-    "meta_alfabetizacao_municipio": ("meta_alfabetizacao_municipio", MetaAlfabetizacaoMunicipioRecord),
-    "alunos": ("alunos", DadosAlunosRecord),
+class SourceTable(NamedTuple):
+    """Origem de uma entidade no BigQuery.
+
+    `dataset` ausente significa "o dataset da fonte principal"
+    (`settings.source_dataset`), que é o caso das 6 entidades do indicador. Uma
+    fonte externa de enriquecimento (Censo Escolar, IBGE, Atlas, FUNDEB) vive em
+    **outro** dataset do Base dos Dados, e é para isso que o campo existe: antes
+    dele, o mapa guardava só o nome da tabela e a query era montada sempre contra
+    `settings.source_dataset`, o que tornava qualquer fonte de fora inalcançável
+    pela extração batch.
+
+    O contrato da entidade **não** fica aqui — vem de `contracts.registry`, que é
+    a fonte única. Este mapa carrega só o que é conhecimento de origem.
+    """
+
+    tabela: str
+    dataset: str | None = None
+
+    def reference(self, default_dataset: str) -> str:
+        """Referência qualificada para a query: `dataset.tabela`."""
+        return f"{self.dataset or default_dataset}.{self.tabela}"
+
+
+ENTITY_TABLE_MAP: dict[str, SourceTable] = {
+    "uf": SourceTable("uf"),
+    "municipio": SourceTable("municipio"),
+    "meta_alfabetizacao_brasil": SourceTable("meta_alfabetizacao_brasil"),
+    "meta_alfabetizacao_uf": SourceTable("meta_alfabetizacao_uf"),
+    "meta_alfabetizacao_municipio": SourceTable("meta_alfabetizacao_municipio"),
+    "alunos": SourceTable("alunos"),
 }
 
 
@@ -161,7 +178,7 @@ def _run_extraction(entidade: str, sql: str) -> None:
     `write_partition` e deixar a partição com uma mistura inconsistente de
     arquivos de dois runs diferentes.
     """
-    _tabela, modelo = ENTITY_TABLE_MAP[entidade]
+    modelo = model_for(entidade)
     settings = get_settings()
 
     with gcs_lock(settings.bucket_name, f"bronze/.locks/{entidade}.lock"):
@@ -189,14 +206,14 @@ def _run_extraction(entidade: str, sql: str) -> None:
 
 def extract_full(entidade: str) -> None:
     """Extrai todos os dados de uma entidade do BigQuery para Bronze."""
-    tabela, _modelo = ENTITY_TABLE_MAP[entidade]
-    sql = f"SELECT * FROM `{get_settings().source_dataset}.{tabela}`"
+    origem = ENTITY_TABLE_MAP[entidade]
+    sql = f"SELECT * FROM `{origem.reference(get_settings().source_dataset)}`"
     _run_extraction(entidade, sql)
 
 
 def extract_incremental(entidade: str) -> None:
     """Extrai apenas os anos novos de uma entidade do BigQuery para Bronze."""
-    tabela, _modelo = ENTITY_TABLE_MAP[entidade]
+    origem = ENTITY_TABLE_MAP[entidade]
     existing_years = bronze_reader.list_bronze_years(entidade)
 
     if not existing_years:
@@ -204,7 +221,10 @@ def extract_incremental(entidade: str) -> None:
         return
 
     max_existing = max(existing_years)
-    sql = f"SELECT * FROM `{get_settings().source_dataset}.{tabela}` WHERE ano > {max_existing}"
+    sql = (
+        f"SELECT * FROM `{origem.reference(get_settings().source_dataset)}` "
+        f"WHERE ano > {max_existing}"
+    )
     _run_extraction(entidade, sql)
 
 

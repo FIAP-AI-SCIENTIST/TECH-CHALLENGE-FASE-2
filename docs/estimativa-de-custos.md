@@ -28,7 +28,7 @@ O projeto é dimensionado para rodar dentro dos **free tiers** do GCP. Como salv
 | BigQuery dataset `alfabetizacao_analytics` (localização `US`) | Gold (5 dims, 7 facts, 3 marts) + `pipeline_audit_log` + `data_quality_log` | Query on-demand: US$ 6,25/TiB escaneado + storage US$ 0,02/GB·mês (ativo) |
 | Pub/Sub topic + subscription | Streaming sintético (producer → consumer) | US$ 40/TiB de throughput + retenção |
 | Cloud Function 2nd gen `alfabetizacao-streaming-producer` (256 MB, até 1 instância) | Publica eventos sintéticos | Cloud Run: vCPU-s e GB-s |
-| Cloud Scheduler | Dispara o producer a cada 10 min (`*/10 * * * *`) | US$ 0,004/job (acima do free tier) |
+| Cloud Scheduler | Dispara o producer a cada 10 min (`*/10 * * * *`) | US$ 0,10/job·mês (free tier: 3 jobs/mês por conta de faturamento) |
 | Service account (IAM), canal de monitoramento (e-mail), alerta de orçamento | Acessos, alertas, salvaguarda | sem custo |
 
 Todos os recursos cobráveis levam cost labels (`pipeline`, `componente`), permitindo atribuir o custo por camada no relatório de faturamento.

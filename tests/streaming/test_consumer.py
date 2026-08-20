@@ -107,16 +107,107 @@ class TestConsumeBatch:
         mock_ack.assert_not_called()
 
     def test_isolates_bad_message_from_good_ones(self):
-        """Regressão: uma mensagem malformada não impede o ack das demais."""
+        """Regressão: uma mensagem malformada não impede o processamento das demais.
+
+        **Mudança de comportamento deliberada**: este teste antes exigia
+        `"ack-bad" not in ack_ids`, ou seja, consagrava a mensagem irrecuperável
+        ficando pendente para reentrega. Isso é o que travava a subscription —
+        acumuladas, essas mensagens ocupam o lote (`max_messages`) e nenhuma boa
+        volta a ser consumida. Agora a irrecuperável é descartada **e** ackada.
+        """
         good = _make_message("uf", {"ano": 2024, "sigla_uf": "SP"}, message_id="good", ack_id="ack-good")
         bad = _make_message("entidade_desconhecida", {"x": 1}, message_id="bad", ack_id="ack-bad")
 
         mock_ack, mock_clear, mock_write, mock_run = self._run_with_messages([good, bad])
 
+        # A boa foi gravada; a ruim não virou linha em nenhuma partição.
+        mock_write.assert_called_once()
+        assert mock_write.call_args.args[0] == "uf"
+
         mock_ack.assert_called_once()
         ack_ids = mock_ack.call_args.args[2]
-        assert ack_ids == ["ack-good"]
-        assert "ack-bad" not in ack_ids
+        assert set(ack_ids) == {"ack-good", "ack-bad"}
+
+    def test_discards_and_acks_unregistered_entity(self):
+        """Entidade fora do registro é irrecuperável: reentregar repetiria o erro."""
+        bad = _make_message("censo_escolar", {"ano": 2023}, message_id="m-bad", ack_id="ack-bad")
+
+        mock_ack, _clear, mock_write, mock_run = self._run_with_messages([bad])
+
+        mock_write.assert_not_called()
+        mock_ack.assert_called_once()
+        assert mock_ack.call_args.args[2] == ["ack-bad"]
+        # A auditoria registra a mensagem lida e nenhuma gravada.
+        assert mock_run.rows_read == 1
+        assert mock_run.rows_written == 0
+
+    def test_discards_and_acks_payload_that_violates_contract(self):
+        """Entidade registrada, payload inválido: também é irrecuperável.
+
+        `ano=1500` viola a faixa declarada no contrato (banda de sanidade
+        2000-2100), então `modelo(**payload)` levanta ValidationError.
+        """
+        bad = _make_message("uf", {"ano": 1500, "sigla_uf": "SP"}, message_id="m-inv", ack_id="ack-inv")
+
+        mock_ack, _clear, mock_write, _run = self._run_with_messages([bad])
+
+        mock_write.assert_not_called()
+        mock_ack.assert_called_once()
+        assert mock_ack.call_args.args[2] == ["ack-inv"]
+
+    def test_write_failure_keeps_valid_message_pending_while_discarding_irrecoverable(self):
+        """A distinção que sustenta o desenho: no mesmo lote, a válida cuja escrita
+        falhou volta na reentrega (sem ack) e a irrecuperável sai (com ack).
+        """
+        good = _make_message("uf", {"ano": 2024, "sigla_uf": "SP"}, message_id="good", ack_id="ack-good")
+        bad = _make_message("entidade_desconhecida", {"x": 1}, message_id="bad", ack_id="ack-bad")
+
+        with patch("streaming.consumer.pubsub_v1.SubscriberClient") as mock_client_cls:
+            mock_client_cls.return_value.subscription_path.return_value = "projects/x/subscriptions/y"
+            with patch("streaming.consumer._do_pull", return_value=[good, bad]):
+                with patch("streaming.consumer._do_ack") as mock_ack:
+                    with patch(
+                        "streaming.consumer.bronze_writer.write_partition",
+                        side_effect=RuntimeError("GCS indisponível"),
+                    ):
+                        with patch("streaming.consumer.get_consumer_lag", return_value=0):
+                            with patch("streaming.consumer.log_execution") as mock_log:
+                                mock_run = MagicMock()
+                                mock_log.return_value.__enter__ = lambda self: mock_run
+                                mock_log.return_value.__exit__ = lambda self, *a: None
+
+                                consume_batch(max_messages=10)
+
+        mock_ack.assert_called_once()
+        assert mock_ack.call_args.args[2] == ["ack-bad"]
+
+    def test_discard_log_carries_truncated_payload_as_evidence(self):
+        """Descarte sem evidência seria perda silenciosa: o log leva o payload."""
+        payload_longo = {"ano": 2024, "lixo": "x" * 500}
+        bad = _make_message("entidade_desconhecida", payload_longo, message_id="m-long", ack_id="ack-long")
+
+        with patch("streaming.consumer.pubsub_v1.SubscriberClient") as mock_client_cls:
+            mock_client_cls.return_value.subscription_path.return_value = "projects/x/subscriptions/y"
+            with patch("streaming.consumer._do_pull", return_value=[bad]):
+                with patch("streaming.consumer._do_ack"):
+                    with patch("streaming.consumer.get_consumer_lag", return_value=0):
+                        with patch("streaming.consumer.setup_logger") as mock_setup:
+                            mock_logger = MagicMock()
+                            mock_setup.return_value = mock_logger
+                            with patch("streaming.consumer.log_execution") as mock_log:
+                                mock_run = MagicMock()
+                                mock_log.return_value.__enter__ = lambda self: mock_run
+                                mock_log.return_value.__exit__ = lambda self, *a: None
+
+                                consume_batch(max_messages=10)
+
+        chamadas = mock_logger.error.call_args_list
+        extras = [c.kwargs.get("extra", {}) for c in chamadas if c.kwargs.get("extra")]
+        assert any(e.get("message_id") == "m-long" for e in extras)
+
+        payload_logado = next(e["payload"] for e in extras if "payload" in e)
+        assert payload_logado.endswith("... (truncado)")
+        assert len(payload_logado) < 500
 
     def test_never_clears_the_daily_partition(self):
         """Regressão: a partição "data_ingestao=" é compartilhada por todos os

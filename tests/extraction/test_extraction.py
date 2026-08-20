@@ -13,6 +13,7 @@ from extraction.extraction import (
     BATCH_THRESHOLD,
     ENTITY_TABLE_MAP,
     MAX_BYTES_BILLED,
+    SourceTable,
     _do_query,
     _instantiate_records,
     compute_incremental_years,
@@ -233,6 +234,101 @@ class TestExtractFull:
                 mock_log.return_value.__exit__ = lambda self, *a: None
                 with pytest.raises(KeyError):
                     extract_full("inexistente")
+
+
+class TestSourceTable:
+    """Referência qualificada da tabela de origem."""
+
+    def test_defaults_to_main_source_dataset(self):
+        assert SourceTable("uf").reference("basedosdados.br_inep") == "basedosdados.br_inep.uf"
+
+    def test_explicit_dataset_overrides_default(self):
+        origem = SourceTable("municipio", dataset="basedosdados.br_ibge_populacao")
+        assert origem.reference("basedosdados.br_inep") == "basedosdados.br_ibge_populacao.municipio"
+
+    def test_existing_entities_use_the_default_dataset(self):
+        assert all(origem.dataset is None for origem in ENTITY_TABLE_MAP.values())
+
+
+class TestExternalSourceSeam:
+    """Uma fonte externa entra por registro (contrato + tabela de origem), sem
+    alteração no código da extração — inclusive quando vive em outro dataset.
+    """
+
+    def test_queries_the_declared_external_dataset(self, monkeypatch):
+        from pydantic import BaseModel
+
+        from contracts import registry
+
+        class CensoEscolarRecord(BaseModel):
+            ano: int | None = None
+            id_municipio: str | None = None
+            qtd_escolas: int | None = None
+
+        monkeypatch.setitem(registry.ENTITY_MODELS, "censo_escolar", CensoEscolarRecord)
+        monkeypatch.setitem(
+            ENTITY_TABLE_MAP,
+            "censo_escolar",
+            SourceTable("escola", dataset="basedosdados.br_inep_censo_escolar"),
+        )
+
+        mock_rows = [{"ano": 2023, "id_municipio": "3550308", "qtd_escolas": 12}]
+        mock_rows_iter = MagicMock()
+        mock_rows_iter.total_rows = 1
+        mock_rows_iter.__iter__ = lambda self: iter(mock_rows)
+
+        with patch("extraction.extraction.bigquery.Client") as mock_bq_client:
+            mock_bq_client.return_value.query.return_value.result.return_value = mock_rows_iter
+            with patch("extraction.extraction.bronze_writer.write_partition") as mock_write, \
+                 patch("extraction.extraction.bronze_writer.clear_partition"):
+                mock_write.return_value = 1
+                with patch("extraction.extraction.log_execution") as mock_log:
+                    mock_run = MagicMock()
+                    mock_log.return_value.__enter__ = lambda self: mock_run
+                    mock_log.return_value.__exit__ = lambda self, *a: None
+
+                    extract_full("censo_escolar")
+
+        sql = mock_bq_client.return_value.query.call_args.args[0]
+        assert "basedosdados.br_inep_censo_escolar.escola" in sql
+
+        # E a escrita usa o schema derivado do contrato registrado, não um schema
+        # embutido na extração.
+        assert mock_write.call_args.args[0] == "censo_escolar"
+        tabela_escrita = mock_write.call_args.args[2]
+        assert tabela_escrita.schema.names == ["ano", "id_municipio", "qtd_escolas"]
+
+    def test_incremental_uses_the_external_dataset_too(self, monkeypatch):
+        from pydantic import BaseModel
+
+        from contracts import registry
+
+        class FundebRecord(BaseModel):
+            ano: int | None = None
+            valor: float | None = None
+
+        monkeypatch.setitem(registry.ENTITY_MODELS, "fundeb", FundebRecord)
+        monkeypatch.setitem(
+            ENTITY_TABLE_MAP, "fundeb", SourceTable("repasse", dataset="basedosdados.br_fnde")
+        )
+
+        mock_rows_iter = MagicMock()
+        mock_rows_iter.total_rows = 0
+        mock_rows_iter.__iter__ = lambda self: iter([])
+
+        with patch("extraction.extraction.bronze_reader.list_bronze_years", return_value={2022}):
+            with patch("extraction.extraction.bigquery.Client") as mock_bq_client:
+                mock_bq_client.return_value.query.return_value.result.return_value = mock_rows_iter
+                with patch("extraction.extraction.log_execution") as mock_log:
+                    mock_run = MagicMock()
+                    mock_log.return_value.__enter__ = lambda self: mock_run
+                    mock_log.return_value.__exit__ = lambda self, *a: None
+
+                    extract_incremental("fundeb")
+
+        sql = mock_bq_client.return_value.query.call_args.args[0]
+        assert "basedosdados.br_fnde.repasse" in sql
+        assert "WHERE ano > 2022" in sql
 
 
 class TestExtractIncremental:
