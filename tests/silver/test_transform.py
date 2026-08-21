@@ -50,7 +50,10 @@ class TestClean:
             "rede": {"2": "Estadual"},
             "serie": {"2": "2° ano do Ensino Fundamental"},
             "diretorio_municipio": {
-                "0550308": {"nome": "São Paulo", "sigla_uf": "SP", "nome_regiao": "Sudeste", "capital_uf": 1}
+                "0550308": {
+                    "nome": "São Paulo", "sigla_uf": "SP", "nome_regiao": "Sudeste", "capital_uf": 1,
+                    "idhm": 0.805, "idhm_educacao": 0.75, "idhm_renda": 0.80, "idhm_longevidade": 0.87,
+                }
             },
         }
 
@@ -61,6 +64,28 @@ class TestClean:
         assert limpa.column("rede_desc").to_pylist() == ["Estadual"]
         assert limpa.column("nome").to_pylist() == ["São Paulo"]
         assert limpa.column("sigla_uf").to_pylist() == ["SP"]
+        assert limpa.column("idhm").to_pylist() == [0.805]
+        assert limpa.column("idhm_educacao").to_pylist() == [0.75]
+
+    def test_municipio_enrichment_without_idhm_still_works(self):
+        """Aditivo: diretório sem o Atlas fundido (dict antigo, sem as 4
+        chaves de IDHM) continua enriquecendo normalmente — idhm sai None."""
+        tabela = pa.table({
+            "ano": [2023],
+            "id_municipio": ["550308"],
+            "serie": ["2"],
+            "rede": ["2"],
+        })
+        referencias = {
+            "diretorio_municipio": {
+                "0550308": {"nome": "São Paulo", "sigla_uf": "SP", "nome_regiao": "Sudeste", "capital_uf": 1}
+            },
+        }
+
+        limpa, _ = clean("municipio", tabela, referencias)
+
+        assert limpa.column("nome").to_pylist() == ["São Paulo"]
+        assert limpa.column("idhm").to_pylist() == [None]
 
     def test_rejects_invalid_id_municipio(self):
         tabela = pa.table({

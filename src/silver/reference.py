@@ -13,10 +13,18 @@ from google.cloud import bigquery
 
 from common.retry import with_retry
 from config import get_settings
+from silver.transform import normalize_key
 
 DICIONARIO_TABLE = "basedosdados.br_inep_avaliacao_alfabetizacao.dicionario"
 DIRETORIO_UF_TABLE = "basedosdados.br_bd_diretorios_brasil.uf"
 DIRETORIO_MUNICIPIO_TABLE = "basedosdados.br_bd_diretorios_brasil.municipio"
+# Atlas do Desenvolvimento Humano (IPEA/PNUD/FJP) — fonte externa de
+# enriquecimento (não é dado do domínio do indicador). Confirmado via
+# documentação pública/uso da comunidade, não via query real contra o
+# BigQuery (sem credenciais disponíveis no momento da escrita) — reconfirme
+# com `bq show basedosdados:mundo_onu_adh.municipio` antes de rodar em
+# produção pela primeira vez.
+ATLAS_IDHM_TABLE = "basedosdados.mundo_onu_adh.municipio"
 TIMEOUT_SECONDS = 10
 # Cap de custo — mesmo padrão de extraction._do_query.
 MAX_BYTES_BILLED = 10 * 2**30
@@ -80,3 +88,58 @@ def get_diretorio_municipio() -> tuple[dict[str, dict], int | None]:
         }
         for row in rows
     }, bytes_processed
+
+
+def get_atlas_idhm(ano: int = 2010) -> tuple[dict[str, dict], int | None]:
+    """Mapa id_municipio -> {idhm, idhm_educacao, idhm_renda, idhm_longevidade}
+    do Atlas do Desenvolvimento Humano (PNUD/IPEA/FJP), + bytes processados.
+
+    O Atlas é censitário, não anual — os anos disponíveis são 1991, 2000 e
+    2010; `ano` seleciona o Censo de referência, com default no mais recente.
+    As colunas da fonte usam sufixo abreviado (`idhm_e`/`idhm_l`/`idhm_r`) —
+    aqui saem com nome descritivo, mesma tradução que `get_diretorio_municipio`
+    já faz para o subconjunto de colunas do diretório.
+    """
+    settings = get_settings()
+    client = bigquery.Client(project=settings.project_id)
+    sql = f"""
+        SELECT id_municipio, idhm, idhm_e, idhm_l, idhm_r
+        FROM `{ATLAS_IDHM_TABLE}`
+        WHERE ano = {ano}
+    """
+    rows, bytes_processed = _do_query(client, sql)
+    return {
+        row["id_municipio"]: {
+            "idhm": row["idhm"],
+            "idhm_educacao": row["idhm_e"],
+            "idhm_renda": row["idhm_r"],
+            "idhm_longevidade": row["idhm_l"],
+        }
+        for row in rows
+    }, bytes_processed
+
+
+def merge_idhm_into_diretorio(diretorio_municipio: dict[str, dict], atlas_idhm: dict[str, dict]) -> dict[str, dict]:
+    """Funde o Atlas IDHM no diretório de município por `id_municipio`
+    normalizado — aditivo, sem tabela de lookup separada: é a mesma peça que
+    já carrega dado territorial por município (`get_diretorio_municipio`),
+    consumida por `silver.transform._municipio_dict_to_table` e por
+    `gold.pipeline` para `dim_municipio`.
+
+    Município sem cobertura no Atlas (ex.: criado depois do Censo 2010) sai
+    com as 4 colunas IDHM em `None` — nunca é descartado do diretório por
+    isso, mesma regra de "nunca descarte silencioso" já aplicada a
+    `id_municipio` inválido em `silver.transform.clean`.
+    """
+    atlas_normalizado = {normalize_key(chave): dados for chave, dados in atlas_idhm.items()}
+    fundido: dict[str, dict] = {}
+    for id_municipio, dados in diretorio_municipio.items():
+        info = atlas_normalizado.get(normalize_key(id_municipio))
+        fundido[id_municipio] = {
+            **dados,
+            "idhm": info["idhm"] if info else None,
+            "idhm_educacao": info["idhm_educacao"] if info else None,
+            "idhm_renda": info["idhm_renda"] if info else None,
+            "idhm_longevidade": info["idhm_longevidade"] if info else None,
+        }
+    return fundido

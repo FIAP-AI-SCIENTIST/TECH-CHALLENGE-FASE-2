@@ -42,6 +42,12 @@ Por que esse design:
 | `sigla_uf` | STRING |
 | `nome_regiao` | STRING |
 | `capital_uf` | INT64 |
+| `idhm` | FLOAT64 |
+| `idhm_educacao` | FLOAT64 |
+| `idhm_renda` | FLOAT64 |
+| `idhm_longevidade` | FLOAT64 |
+
+As 4 colunas de IDHM vêm do Atlas do Desenvolvimento Humano (IPEA/PNUD/FJP, `mundo_onu_adh.municipio`), fundidas no diretório territorial pela Silver antes de chegar aqui (`silver.reference.merge_idhm_into_diretorio`) — fonte externa de enriquecimento, censitária (1991/2000/2010), não anual. Município sem cobertura no Atlas (criado depois do Censo de referência) sai com as 4 colunas `NULL`, não é excluído da dimensão.
 
 ### `dim_rede` — grain: código de rede
 

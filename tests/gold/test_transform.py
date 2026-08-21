@@ -53,6 +53,38 @@ class TestBuildDimMunicipio:
         dim = build_dim_municipio(diretorio)
         assert dim.num_rows == 0
 
+    def test_includes_idhm_columns_when_present(self):
+        diretorio = pa.table({
+            "id_municipio": ["3550308"],
+            "nome": ["São Paulo"],
+            "sigla_uf": ["SP"],
+            "nome_regiao": ["Sudeste"],
+            "capital_uf": [1],
+            "idhm": [0.805],
+            "idhm_educacao": [0.75],
+            "idhm_renda": [0.80],
+            "idhm_longevidade": [0.87],
+        })
+        dim = build_dim_municipio(diretorio)
+        assert dim.column("idhm").to_pylist() == [0.805]
+        assert dim.column("idhm_educacao").to_pylist() == [0.75]
+        assert dim.column("idhm_renda").to_pylist() == [0.80]
+        assert dim.column("idhm_longevidade").to_pylist() == [0.87]
+
+    def test_idhm_columns_default_to_null_when_absent(self):
+        """Aditivo: diretório sem o Atlas fundido ainda produz dim_municipio
+        válida, com as 4 colunas IDHM presentes e nulas."""
+        diretorio = pa.table({
+            "id_municipio": ["3550308"],
+            "nome": ["São Paulo"],
+            "sigla_uf": ["SP"],
+            "nome_regiao": ["Sudeste"],
+            "capital_uf": [1],
+        })
+        dim = build_dim_municipio(diretorio)
+        assert dim.column("idhm").to_pylist() == [None]
+        assert dim.schema.field("idhm").type == pa.float64()
+
 
 class TestBuildDimCodigo:
     def test_rede_distinct_across_sources(self):

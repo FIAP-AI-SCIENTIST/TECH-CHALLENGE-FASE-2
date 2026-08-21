@@ -129,14 +129,24 @@ def _municipio_dict_to_table(mapping: dict) -> pa.Table:
             "sigla_uf": pa.array([], type=pa.string()),
             "nome_regiao": pa.array([], type=pa.string()),
             "capital_uf": pa.array([], type=pa.int64()),
+            "idhm": pa.array([], type=pa.float64()),
+            "idhm_educacao": pa.array([], type=pa.float64()),
+            "idhm_renda": pa.array([], type=pa.float64()),
+            "idhm_longevidade": pa.array([], type=pa.float64()),
         })
     ids = list(mapping.keys())
+    # `.get()` porque o IDHM é enriquecimento aditivo (merge_idhm_into_diretorio):
+    # um dicionário só com dado territorial (sem Atlas fundido) continua válido.
     return pa.table({
         "id_municipio": ids,
         "nome": [mapping[i]["nome"] for i in ids],
         "sigla_uf": [mapping[i]["sigla_uf"] for i in ids],
         "nome_regiao": [mapping[i]["nome_regiao"] for i in ids],
         "capital_uf": [mapping[i]["capital_uf"] for i in ids],
+        "idhm": pa.array([mapping[i].get("idhm") for i in ids], type=pa.float64()),
+        "idhm_educacao": pa.array([mapping[i].get("idhm_educacao") for i in ids], type=pa.float64()),
+        "idhm_renda": pa.array([mapping[i].get("idhm_renda") for i in ids], type=pa.float64()),
+        "idhm_longevidade": pa.array([mapping[i].get("idhm_longevidade") for i in ids], type=pa.float64()),
     })
 
 
@@ -204,6 +214,10 @@ def clean(entidade: str, tabela: pa.Table, referencias: dict) -> tuple[pa.Table,
             "municipio_dict.sigla_uf AS sigla_uf",
             "municipio_dict.nome_regiao AS nome_regiao",
             "municipio_dict.capital_uf AS capital_uf",
+            "municipio_dict.idhm AS idhm",
+            "municipio_dict.idhm_educacao AS idhm_educacao",
+            "municipio_dict.idhm_renda AS idhm_renda",
+            "municipio_dict.idhm_longevidade AS idhm_longevidade",
         ])
         join_parts.append(
             "LEFT JOIN municipio_dict ON normalize_key(bronze.id_municipio) = municipio_dict.id_municipio"

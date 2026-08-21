@@ -127,20 +127,37 @@ def build_dim_uf(diretorio_uf: pa.Table) -> pa.Table:
 def build_dim_municipio(diretorio_municipio: pa.Table) -> pa.Table:
     """Dimensão Município: uma linha por `id_municipio`
     (fonte: diretório oficial `br_bd_diretorios_brasil.municipio`,
-    ~5.570 municípios IBGE). Sem `ROW_NUMBER` por ano — o diretório
-    não tem `ano`; é referência territorial atual."""
-    colunas = ["id_municipio", "nome", "sigla_uf", "nome_regiao", "capital_uf"]
+    ~5.570 municípios IBGE, fundido com o Atlas do Desenvolvimento Humano —
+    `idhm`/`idhm_educacao`/`idhm_renda`/`idhm_longevidade`). Sem `ROW_NUMBER`
+    por ano — o diretório não tem `ano`; é referência territorial atual."""
+    colunas = [
+        "id_municipio", "nome", "sigla_uf", "nome_regiao", "capital_uf",
+        "idhm", "idhm_educacao", "idhm_renda", "idhm_longevidade",
+    ]
     if "id_municipio" not in diretorio_municipio.column_names:
+        # `capital_uf` é INT64 e as 4 colunas de IDHM são FLOAT64 na fonte — o
+        # fallback vazio precisa dos mesmos tipos, senão a tabela criada num
+        # run sem diretório conflita com o do run seguinte.
         vazio = {c: pa.array([], type=pa.string()) for c in colunas}
-        # `capital_uf` é INT64 na fonte — o fallback vazio precisa do mesmo tipo,
-        # senão a tabela criada num run sem diretório conflita com o do run seguinte.
         vazio["capital_uf"] = pa.array([], type=pa.int64())
+        for coluna_idhm in ("idhm", "idhm_educacao", "idhm_renda", "idhm_longevidade"):
+            vazio[coluna_idhm] = pa.array([], type=pa.float64())
         return with_surrogate_keys(pa.table(vazio), SK_MUNICIPIO).select(["sk_municipio"] + colunas)
 
+    tabela = _select_existing(diretorio_municipio, colunas)
+    # IDHM é enriquecimento aditivo: entrada sem o Atlas fundido (ex.: chamadores
+    # antigos, fixtures de teste) ainda é uma dim_municipio válida, com NULL.
+    for coluna_idhm in ("idhm", "idhm_educacao", "idhm_renda", "idhm_longevidade"):
+        if coluna_idhm not in tabela.column_names:
+            tabela = tabela.append_column(
+                coluna_idhm, pa.array([None] * tabela.num_rows, type=pa.float64())
+            )
+
     conn = duckdb.connect(":memory:")
-    conn.register("t", _select_existing(diretorio_municipio, colunas))
+    conn.register("t", tabela)
     sql = """
-        SELECT DISTINCT id_municipio, nome, sigla_uf, nome_regiao, capital_uf
+        SELECT DISTINCT id_municipio, nome, sigla_uf, nome_regiao, capital_uf,
+               idhm, idhm_educacao, idhm_renda, idhm_longevidade
         FROM t WHERE id_municipio IS NOT NULL ORDER BY id_municipio
     """
     dim = conn.sql(sql).to_arrow_table()

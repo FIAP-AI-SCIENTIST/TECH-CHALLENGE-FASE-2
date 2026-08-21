@@ -56,6 +56,9 @@ class TestRunGold:
                  "3550308": {"nome": "São Paulo", "sigla_uf": "SP", "nome_regiao": "Sudeste", "capital_uf": 1},
                  "3304557": {"nome": "Rio de Janeiro", "sigla_uf": "RJ", "nome_regiao": "Sudeste", "capital_uf": 1},
              }, 2048)), \
+             patch("gold.pipeline.get_atlas_idhm", return_value=({
+                 "3550308": {"idhm": 0.805, "idhm_educacao": 0.75, "idhm_renda": 0.80, "idhm_longevidade": 0.87},
+             }, 512)), \
              patch("gold.pipeline.gcs_lock", new=_mock_lock()), \
              patch("gold.pipeline.log_execution", _mock_log_execution()), \
              _mock_create_view() as mock_create_view, \
@@ -74,6 +77,11 @@ class TestRunGold:
         assert row["meta_indicador"] == 75.0
         assert row["gap_pontos"] == 5.0
         assert row["sk_municipio"] is not None and row["sk_tempo"] is not None
+        # dim_municipio carrega o IDHM fundido do Atlas do Desenvolvimento Humano.
+        dim_municipio = next(c.args[1] for c in mock_write.call_args_list if c.args[0] == "dim_municipio")
+        linha_sp = next(r for r in dim_municipio.to_pylist() if r["id_municipio"] == "3550308")
+        assert linha_sp["idhm"] == 0.805
+        assert linha_sp["idhm_educacao"] == 0.75
         # dim_tempo cobre os anos observados e o horizonte da meta.
         dim_tempo = next(c.args[1] for c in mock_write.call_args_list if c.args[0] == "dim_tempo")
         anos_dim = set(dim_tempo.column("ano").to_pylist())
@@ -93,6 +101,7 @@ class TestRunGold:
 
         with patch("gold.pipeline.get_diretorio_uf", return_value=({}, 0)), \
              patch("gold.pipeline.get_diretorio_municipio", return_value=({}, 0)), \
+             patch("gold.pipeline.get_atlas_idhm", return_value=({}, 0)), \
              patch("gold.pipeline.silver_reader.read_entity", return_value=empty), \
              patch("gold.pipeline.silver_reader.read_scd2_table_raw", return_value=None), \
              patch("gold.pipeline.gcs_lock", new=_mock_lock()), \
@@ -117,6 +126,7 @@ class TestRunGold:
 
         with patch("gold.pipeline.get_diretorio_uf", return_value=({}, 0)), \
              patch("gold.pipeline.get_diretorio_municipio", return_value=({}, 0)), \
+             patch("gold.pipeline.get_atlas_idhm", return_value=({}, 0)), \
              patch("gold.pipeline.silver_reader.read_entity", return_value=empty), \
              patch("gold.pipeline.silver_reader.read_scd2_table_raw", return_value=None), \
              patch("gold.pipeline.gcs_lock", new=_mock_lock()), \
@@ -151,6 +161,7 @@ class TestRunGold:
 
         with patch("gold.pipeline.get_diretorio_uf", return_value=({"SP": "São Paulo"}, 1024)), \
              patch("gold.pipeline.get_diretorio_municipio", return_value=({}, 0)), \
+             patch("gold.pipeline.get_atlas_idhm", return_value=({}, 0)), \
              patch("gold.pipeline.silver_reader.read_entity", return_value=uf), \
              patch("gold.pipeline.silver_reader.read_scd2_table_raw", return_value=None), \
              patch("gold.pipeline.gcs_lock", new=_mock_lock()), \
@@ -193,8 +204,17 @@ class TestRunGold:
              "sigla_uf": "GO", "nome_regiao": "Centro-Oeste", "capital_uf": 1},
         ]
 
+        atlas_rows = [
+            {"id_municipio": "5208707", "idhm": 0.799, "idhm_e": 0.7, "idhm_l": 0.85, "idhm_r": 0.78},
+        ]
+
         def do_query(_client, sql):
-            return (uf_rows if "uf" in sql.split("`")[1].rsplit(".", 1)[-1] else municipio_rows), 512
+            tabela = sql.split("`")[1]
+            if "mundo_onu_adh" in tabela:
+                return atlas_rows, 512
+            if tabela.rsplit(".", 1)[-1] == "uf":
+                return uf_rows, 512
+            return municipio_rows, 512
 
         with patch("silver.reference.bigquery.Client"), \
              patch("silver.reference._do_query", side_effect=do_query), \
@@ -213,4 +233,12 @@ class TestRunGold:
         assert escritas["dim_municipio"].column("id_municipio").to_pylist() == ["5208707", "5219308"]
         # Tipo preservado da fonte: forçar string quebra o load da dim.
         assert escritas["dim_municipio"].schema.field("capital_uf").type == pa.int64()
+        # G1: IDHM fundido só para o município presente no Atlas mockado;
+        # o outro município do diretório sai com IDHM None, não descartado.
+        idhm_por_id = dict(zip(
+            escritas["dim_municipio"].column("id_municipio").to_pylist(),
+            escritas["dim_municipio"].column("idhm").to_pylist(),
+        ))
+        assert idhm_por_id["5208707"] == 0.799
+        assert idhm_por_id["5219308"] is None
 
