@@ -255,8 +255,9 @@ Suíte por camada em `tests/` (espelhando `src/`), incluindo Property-Based Test
 - [x] Silver — limpeza, padronização, normalização de chaves, SCD Tipo 2
 - [x] Gold — modelo dimensional (Kimball) materializado no BigQuery
 - [x] Data Quality — testes de qualidade mapeados às seis dimensões, sobre Silver e Gold
+- [x] Enriquecimento com fonte externa — Atlas do Desenvolvimento Humano (IDHM e as três componentes em `dim_municipio`, que são as features socioeconômicas do modelo)
 - [x] Modelo de ML sobre a Gold (BigQuery ML: predição de risco de não-alfabetização por município)
-- [ ] Enriquecimento com fontes externas adicionais (Censo Escolar/INEP, FUNDEB) — opcional, fora do MVP
+- [ ] Enriquecimento com outras fontes externas (Censo Escolar/INEP, FUNDEB) — opcional, fora do MVP
 - [ ] Clusterização de municípios por perfil socioeducacional (desigualdade educacional)
 
 ## Evidências de execução
