@@ -43,6 +43,12 @@ class TestRenderTrainDdl:
     def test_filtra_municipio_sem_idhm(self):
         assert "WHERE d.idhm IS NOT NULL" in render_train_ddl()
 
+    def test_filtra_rotulo_nulo(self):
+        """O BigQuery ML rejeita `CREATE MODEL` com rótulo NULL, e linha sem
+        meta vigente tem `atingiu_meta` NULL por desenho — sem esse filtro o
+        treino falha na criação do modelo."""
+        assert "AND f.atingiu_meta IS NOT NULL" in render_train_ddl()
+
 
 class TestRenderEvaluateQuery:
     def test_ml_evaluate_do_modelo_treinado(self):
@@ -76,3 +82,11 @@ class TestRenderPredictionsViewDdl:
         ddl = render_predictions_view_ddl(project_id="p", dataset_id="d")
         assert ddl.startswith(f"CREATE OR REPLACE VIEW `p.d.{PREDICTIONS_VIEW}` AS")
         assert f"MODEL `p.d.{MODEL_NAME}`" in ddl
+
+    def test_nao_filtra_rotulo_nulo_ao_prever(self):
+        """Assimetria proposital com o treino: prever município sem meta
+        vigente é achado analítico válido, então a predição mantém a linha e
+        devolve o rótulo real como passthrough."""
+        ddl = render_predictions_view_ddl()
+        assert "atingiu_meta IS NOT NULL" not in ddl
+        assert "f.atingiu_meta AS atingiu_meta_real" in ddl
