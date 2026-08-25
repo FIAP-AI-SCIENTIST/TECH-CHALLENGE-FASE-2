@@ -57,11 +57,13 @@ Arquitetura Lambda (camada batch + camada streaming convergindo na mesma camada 
 
 ## Aplicação em IA
 
-A camada Gold (modelo dimensional no BigQuery, `alfabetizacao_analytics`) já organiza os dados no grão e no formato que modelos de IA consomem diretamente — via BigQuery ML ou export para notebook — sem voltar à Silver/Bronze. Os modelos em si não estão implementados neste MVP; o que segue é como cada tabela da Gold se conecta a cada uma das três aplicações:
+A camada Gold (modelo dimensional no BigQuery, `alfabetizacao_analytics`) já organiza os dados no grão e no formato que modelos de IA consomem diretamente — via BigQuery ML ou export para notebook — sem voltar à Silver/Bronze. O que segue é como cada tabela da Gold se conecta a cada uma das três aplicações:
 
 ### Modelos de predição de alfabetização
 
-Modelo supervisionado (classificação/regressão) sobre `fact_indicador_municipio` + `fact_meta_resultado_municipio`, com features territoriais vindas de `dim_municipio` — IDHM geral e as três componentes (educação, renda, longevidade) do Atlas do Desenvolvimento Humano, não só nome/UF/região — combinadas com a série histórica de metas e resultados por município. O alvo é sinalizar, antes do resultado da avaliação, municípios/escolas com maior probabilidade de ficar abaixo da meta, permitindo intervenção preventiva. É o IDHM que dá substância socioeconômica real a essa predição: sem ele, a única feature territorial disponível seria categórica (região, capital), insuficiente para capturar o gradiente de desenvolvimento humano que a literatura de educação associa a desempenho. Para features no grão mais fino (aluno), `fact_alunos` já entrega proficiência individual, presença e preenchimento do caderno — pronto para um modelo supervisionado no nível do estudante, não só do município.
+Modelo supervisionado sobre `fact_indicador_municipio` + `fact_meta_resultado_municipio`, com features territoriais vindas de `dim_municipio` — IDHM geral e as três componentes (educação, renda, longevidade) do Atlas do Desenvolvimento Humano, não só nome/UF/região — combinadas com a série histórica de metas e resultados por município. O alvo é sinalizar, antes do resultado da avaliação, municípios/escolas com maior probabilidade de ficar abaixo da meta, permitindo intervenção preventiva. É o IDHM que dá substância socioeconômica real a essa predição: sem ele, a única feature territorial disponível seria categórica (região, capital), insuficiente para capturar o gradiente de desenvolvimento humano que a literatura de educação associa a desempenho. Para features no grão mais fino (aluno), `fact_alunos` já entrega proficiência individual, presença e preenchimento do caderno — pronto para um modelo supervisionado no nível do estudante, não só do município.
+
+**Implementado, não só planejado**: `make ml` (`src/ml/`) treina uma regressão logística via BigQuery ML (`CREATE MODEL ... OPTIONS(model_type='LOGISTIC_REG')`) direto sobre `alfabetizacao_analytics`, prevendo `atingiu_meta` a partir de `ano` + IDHM/componentes de `dim_municipio`. BigQuery ML porque treino e predição rodam como SQL no mesmo motor que já materializa a Gold — sem exportar dado, sem infra nova, dentro do orçamento free-tier do projeto. Depois do treino, `ML.EVALUATE` registra as métricas (AUC, precisão) no log estruturado e a view `ml_predicao_risco_municipio` (`ML.PREDICT`) fica pronta para consumo — por município, o risco previsto de não atingir a meta ao lado do resultado real observado. Roda sob demanda (`make ml`), fora de `make pipeline`, porque treinar um modelo é uma operação distinta de recomputar uma tabela determinística.
 
 ### Análise de desigualdade educacional
 
@@ -131,6 +133,7 @@ src/
 ├── streaming/         # Producer (eventos sintéticos -> Pub/Sub) e Consumer (Pub/Sub -> Bronze)
 ├── silver/            # Limpeza, tradução de código, normalização de chave, dedup, SCD Tipo 2, reconciliação
 ├── gold/              # Modelo dimensional (Kimball) materializado no BigQuery
+├── ml/                # Aplicação de IA: modelo BigQuery ML de predição de risco sobre a Gold
 ├── quality/           # Data Quality: registry declarativo, checks Great Expectations, gate e evidência
 ├── common/            # Retry compartilhado (backoff exponencial) e lock exclusivo baseado em GCS
 └── observability/     # Logging estruturado, auditoria BigQuery e monitoramento (Consumer Lag)
@@ -212,6 +215,7 @@ make streaming-producer TIPO=indicador N=5       # publica 5 eventos sintéticos
 make streaming-consumer                          # consome o lote disponível e grava na Bronze (com event time)
 make silver                                      # limpa, integra e deduplica a Bronze -> Silver (GCS), com checks inline + reconciliação
 make gold                                        # materializa dimensões, fatos e marts da Silver -> Gold (BigQuery)
+make ml                                          # treina o modelo de risco de não-alfabetização (BigQuery ML) sobre a Gold
 make quality                                     # checks de qualidade (Silver + Gold): registra a evidência e segue
 make quality-gate                                # idem, mas bloqueante: sai com erro se houver falha CRITICA
 
@@ -249,8 +253,9 @@ Suíte por camada em `tests/` (espelhando `src/`), incluindo Property-Based Test
 - [x] Silver — limpeza, padronização, normalização de chaves, SCD Tipo 2
 - [x] Gold — modelo dimensional (Kimball) materializado no BigQuery
 - [x] Data Quality — testes de qualidade mapeados às seis dimensões, sobre Silver e Gold
-- [ ] Enriquecimento com fontes externas (Censo Escolar/INEP, IBGE, FUNDEB) — opcional, fora do MVP
-- [ ] Modelos de ML sobre a Gold (predição de risco, clusterização de desigualdade educacional)
+- [x] Modelo de ML sobre a Gold (BigQuery ML: predição de risco de não-alfabetização por município)
+- [ ] Enriquecimento com fontes externas adicionais (Censo Escolar/INEP, FUNDEB) — opcional, fora do MVP
+- [ ] Clusterização de municípios por perfil socioeducacional (desigualdade educacional)
 
 ## Evidências de execução
 

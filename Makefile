@@ -1,4 +1,4 @@
-.PHONY: install test test-contracts test-extraction test-streaming test-silver test-gold test-quality bronze silver gold quality quality-gate streaming-producer streaming-consumer clean package-producer infra-init infra-plan infra-apply infra-destroy infra-team-init infra-team-plan infra-team-apply infra-team-destroy pipeline pipeline-from-scratch
+.PHONY: install test test-contracts test-extraction test-streaming test-silver test-gold test-quality test-ml bronze silver gold quality quality-gate ml streaming-producer streaming-consumer clean package-producer infra-init infra-plan infra-apply infra-destroy infra-team-init infra-team-plan infra-team-apply infra-team-destroy pipeline pipeline-from-scratch
 
 # O projeto reside num CIFS/SMB share que não suporta symlinks.
 # O venv fica em $HOME/.venvs para evitar o problema.
@@ -33,6 +33,9 @@ test-gold: install
 test-quality: install
 	$(PYTEST) tests/quality/ -v
 
+test-ml: install
+	$(PYTEST) tests/ml/ -v
+
 # --- Bronze Ingestion ---
 
 bronze: install
@@ -52,6 +55,15 @@ silver: install
 gold: install
 	$(PYTHON) -c "from gold.pipeline import run_gold; run_gold()"
 
+
+# --- IA (BigQuery ML sobre a Gold) ---
+
+# Roda sob demanda, fora de `pipeline`/`pipeline-from-scratch` de propósito:
+# treinar um modelo é uma operação distinta de materializar uma tabela
+# determinística, sem custo implícito em todo ciclo batch. Precisa da Gold já
+# materializada (fact_meta_resultado_municipio + dim_municipio).
+ml: install
+	$(PYTHON) -c "from ml.pipeline import run_ml; run_ml()"
 
 # --- Data Quality (Great Expectations sobre Silver/Gold) ---
 
