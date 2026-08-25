@@ -20,8 +20,12 @@ from observability.logging import log_execution, setup_logger
 
 @with_retry()
 def _run_query(client: bigquery.Client, sql: str, timeout: int) -> bigquery.table.RowIterator:
-    """Operação atômica: submete a query e aguarda a conclusão (com retry)."""
-    return client.query(sql, timeout=timeout).result(timeout=timeout)
+    """Operação atômica: submete a query e aguarda a conclusão (com retry).
+
+    `maximum_bytes_billed` cap: JOIN acidentalmente caro falha a query em vez
+    de gerar fatura, mesmo padrão de `extraction.extraction`."""
+    job_config = bigquery.QueryJobConfig(maximum_bytes_billed=ml_model.MAX_BYTES_BILLED)
+    return client.query(sql, job_config=job_config, timeout=timeout).result(timeout=timeout)
 
 
 def run_ml() -> None:

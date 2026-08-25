@@ -2,7 +2,18 @@
 
 from unittest.mock import MagicMock, patch
 
-from ml.pipeline import run_ml
+from ml import model as ml_model
+from ml.pipeline import _run_query, run_ml
+
+
+class TestRunQuery:
+    def test_applies_maximum_bytes_billed_cap(self):
+        """Mesmo espírito do cap de custo da extração: JOIN acidentalmente
+        caro falha a query em vez de gerar fatura (gap encontrado na revisão)."""
+        mock_client = MagicMock()
+        _run_query(mock_client, "SELECT 1", timeout=30)
+        _, kwargs = mock_client.query.call_args
+        assert kwargs["job_config"].maximum_bytes_billed == ml_model.MAX_BYTES_BILLED
 
 
 class TestRunMl:

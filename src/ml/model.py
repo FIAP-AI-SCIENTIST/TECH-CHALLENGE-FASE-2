@@ -30,6 +30,13 @@ PREDICTIONS_VIEW = "ml_predicao_risco_municipio"
 TRAIN_TIMEOUT_SECONDS = 300
 QUERY_TIMEOUT_SECONDS = 30
 
+# Cap de custo, mesmo espírito do MAX_BYTES_BILLED da extração
+# (`extraction.extraction`): treino/avaliação/predição rodam sobre a Gold
+# (~10-25k linhas em fact_meta_resultado_municipio, ordens de magnitude abaixo
+# do teto) — a folga é para não falhar em volume maior, o teto é para que um
+# JOIN acidentalmente caro falhe a query em vez de gerar fatura.
+MAX_BYTES_BILLED = 1 * 2**30
+
 _JOIN_MUNICIPIO_META = """FROM {prefix}fact_meta_resultado_municipio f
 JOIN {prefix}dim_municipio d ON f.sk_municipio = d.sk_municipio
 WHERE d.idhm IS NOT NULL"""
