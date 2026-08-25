@@ -43,7 +43,14 @@ WHERE d.idhm IS NOT NULL"""
 
 
 def _train_query(prefix: str) -> str:
-    """Só features + label — nenhuma chave de negócio entra no treino."""
+    """Só features + label — nenhuma chave de negócio entra no treino.
+
+    Filtra `atingiu_meta IS NOT NULL` além do `idhm IS NOT NULL` do JOIN
+    compartilhado: linhas sem meta vigente têm rótulo NULL por desenho
+    (`gold.transform`), e o BQML rejeita `CREATE MODEL` com rótulo NULL. A
+    query de predição (`_scoring_query`) usa o mesmo JOIN sem esse filtro de
+    propósito — prever município sem meta vigente é achado analítico válido.
+    """
     return f"""SELECT
     f.ano,
     d.idhm,
@@ -51,7 +58,8 @@ def _train_query(prefix: str) -> str:
     d.idhm_renda,
     d.idhm_longevidade,
     f.atingiu_meta AS label
-{_JOIN_MUNICIPIO_META.format(prefix=prefix)}"""
+{_JOIN_MUNICIPIO_META.format(prefix=prefix)}
+  AND f.atingiu_meta IS NOT NULL"""
 
 
 def _scoring_query(prefix: str) -> str:
