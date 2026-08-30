@@ -1,2 +1,2 @@
 REPO: https://github.com/FIAP-AI-SCIENTIST/TECH-CHALLENGE-FASE-2
-VIDEO: <preencher com o link do video executivo antes da entrega>
+VIDEO: https://youtu.be/I7NHTPueYmg
